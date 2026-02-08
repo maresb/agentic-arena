@@ -10,15 +10,15 @@ from arena.state import init_state
 class TestGenerateFinalReport:
     def test_report_created(self) -> None:
         state = init_state(task="Test task", repo="owner/repo")
-        state["round"] = 1
-        state["consensus_reached"] = True
-        state["final_verdict"] = "All agents agree."
-        state["solutions"] = {
+        state.round = 1
+        state.consensus_reached = True
+        state.final_verdict = "All agents agree."
+        state.solutions = {
             "agent_a": "Solution A",
             "agent_b": "Solution B",
             "agent_c": "Solution C",
         }
-        state["analyses"] = {
+        state.analyses = {
             "agent_a": "Analysis A",
             "agent_b": "Analysis B",
             "agent_c": "Analysis C",
@@ -42,11 +42,11 @@ class TestGenerateFinalReport:
 
     def test_report_without_consensus(self) -> None:
         state = init_state(task="Hard task", repo="owner/repo")
-        state["round"] = 3
-        state["consensus_reached"] = False
-        state["final_verdict"] = "Still disagreeing."
-        state["solutions"] = {"agent_a": "Sol"}
-        state["analyses"] = {}
+        state.round = 3
+        state.consensus_reached = False
+        state.final_verdict = "Still disagreeing."
+        state.solutions = {"agent_a": "Sol"}
+        state.analyses = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_final_report(state, tmpdir)
@@ -56,9 +56,9 @@ class TestGenerateFinalReport:
 
     def test_report_includes_alias_mapping(self) -> None:
         state = init_state(task="test", repo="r")
-        state["final_verdict"] = "verdict"
-        state["solutions"] = {}
-        state["analyses"] = {}
+        state.final_verdict = "verdict"
+        state.solutions = {}
+        state.analyses = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_final_report(state, tmpdir)

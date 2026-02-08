@@ -1,73 +1,110 @@
-"""Tests for the CLI entry point."""
+"""Tests for the Typer CLI entry point."""
 
-import json
 import os
 import tempfile
 
-from arena.__main__ import cmd_init, cmd_status
+from typer.testing import CliRunner
+
+from arena.__main__ import app
+from arena.state import init_state, load_state, save_state
+
+runner = CliRunner()
 
 
-class MockNamespace:
-    """Minimal argparse.Namespace replacement for testing."""
-
-    def __init__(self, **kwargs: object) -> None:
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-class TestCmdInit:
+class TestInitCommand:
     def test_creates_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            args = MockNamespace(
-                task="Review auth module",
-                repo="owner/repo",
-                base_branch="main",
-                max_rounds=2,
-                verify_commands=None,
-                arena_dir=tmpdir,
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task", "Review auth module",
+                    "--repo", "owner/repo",
+                    "--arena-dir", tmpdir,
+                ],
             )
-            cmd_init(args)
+            assert result.exit_code == 0
 
             state_path = os.path.join(tmpdir, "state.json")
             assert os.path.exists(state_path)
 
-            with open(state_path) as f:
-                state = json.load(f)
+            state = load_state(state_path)
+            assert state is not None
+            assert state.config.task == "Review auth module"
+            assert state.config.repo == "owner/repo"
+            assert state.config.max_rounds == 3
 
-            assert state["task"] == "Review auth module"
-            assert state["repo"] == "owner/repo"
-            assert state["max_rounds"] == 2
+    def test_custom_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task", "test",
+                    "--repo", "r",
+                    "--base-branch", "develop",
+                    "--max-rounds", "5",
+                    "--arena-dir", tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+
+            state = load_state(os.path.join(tmpdir, "state.json"))
+            assert state is not None
+            assert state.config.base_branch == "develop"
+            assert state.config.max_rounds == 5
 
     def test_verify_commands_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            args = MockNamespace(
-                task="test",
-                repo="r",
-                base_branch="main",
-                max_rounds=3,
-                verify_commands="pixi run pytest,pixi run mypy .",
-                arena_dir=tmpdir,
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task", "test",
+                    "--repo", "r",
+                    "--verify-commands", "pixi run pytest,pixi run mypy .",
+                    "--arena-dir", tmpdir,
+                ],
             )
-            cmd_init(args)
+            assert result.exit_code == 0
 
-            with open(os.path.join(tmpdir, "state.json")) as f:
-                state = json.load(f)
-
-            assert state["verify_commands"] == [
+            state = load_state(os.path.join(tmpdir, "state.json"))
+            assert state is not None
+            assert state.config.verify_commands == [
                 "pixi run pytest",
                 "pixi run mypy .",
             ]
 
-
-class TestCmdStatus:
-    def test_shows_status(self, capsys: object) -> None:
+    def test_output_contains_info(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a state file first
-            from arena.state import init_state, save_state
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task", "my task",
+                    "--repo", "owner/repo",
+                    "--arena-dir", tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+            assert "Arena initialized" in result.output
+            assert "Alias mapping" in result.output
 
+
+class TestStatusCommand:
+    def test_shows_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
             save_state(state, os.path.join(tmpdir, "state.json"))
 
-            args = MockNamespace(arena_dir=tmpdir)
-            cmd_status(args)
-            # If we get here without error, the status command works
+            result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
+            assert result.exit_code == 0
+            assert "Phase: solve" in result.output
+            assert "Round: 0" in result.output
+            assert "Completed: False" in result.output
+
+    def test_missing_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
+            assert result.exit_code == 1
+            assert "No arena state found" in result.output

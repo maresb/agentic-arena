@@ -4,10 +4,42 @@ Parses XML-delimited sections (solution, analysis, verdict) from agent
 responses, with fallback heuristics when tags are missing.
 """
 
+from __future__ import annotations
+
 import logging
 import re
+from enum import StrEnum
+
+from pydantic import BaseModel
 
 logger = logging.getLogger("arena")
+
+
+# ---------------------------------------------------------------------------
+# Verdict model
+# ---------------------------------------------------------------------------
+
+
+class VerdictDecision(StrEnum):
+    """Possible judge decisions."""
+
+    CONSENSUS = "CONSENSUS"
+    CONTINUE = "CONTINUE"
+
+
+class Verdict(BaseModel):
+    """Structured verdict parsed from the judge's response."""
+
+    decision: VerdictDecision = VerdictDecision.CONTINUE
+    convergence_score: int | None = None
+    remaining_disagreements: int | str | None = None
+    base_solution: str | None = None
+    modifications: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# XML extraction
+# ---------------------------------------------------------------------------
 
 
 def extract_xml_section(text: str, tag: str) -> str | None:
@@ -15,6 +47,11 @@ def extract_xml_section(text: str, tag: str) -> str | None:
     pattern = rf"<{tag}>(.*?)</{tag}>"
     match = re.search(pattern, text, re.DOTALL)
     return match.group(1).strip() if match else None
+
+
+# ---------------------------------------------------------------------------
+# Conversation helpers
+# ---------------------------------------------------------------------------
 
 
 def _get_latest_assistant_message(conversation: list[dict]) -> str:
@@ -55,50 +92,59 @@ def extract_latest_response(conversation: list[dict]) -> str:
     return _get_latest_assistant_message(conversation)
 
 
-def parse_verdict(text: str) -> dict:
+# ---------------------------------------------------------------------------
+# Verdict parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_verdict(text: str) -> Verdict:
     """Parse the structured verdict from the judge's response.
 
-    Returns a dict with at least 'decision' (CONSENSUS or CONTINUE)
-    and 'convergence_score' (int or None).
+    Returns a :class:`Verdict` with at least ``decision`` populated.
+    Falls back to keyword scanning when no ``<verdict>`` tag is found.
     """
     verdict_xml = extract_xml_section(text, "verdict")
     if verdict_xml is None:
         # Fallback: scan for CONSENSUS or CONTINUE anywhere in text
         logger.warning("No <verdict> tag found; falling back to keyword scan")
         if re.search(r"\bCONSENSUS\b", text):
-            return {"decision": "CONSENSUS", "convergence_score": None}
-        return {"decision": "CONTINUE", "convergence_score": None}
+            return Verdict(decision=VerdictDecision.CONSENSUS)
+        return Verdict()
 
-    result: dict[str, str | int | None] = {
-        "decision": "CONTINUE",
-        "convergence_score": None,
-        "remaining_disagreements": None,
-        "base_solution": None,
-        "modifications": None,
-    }
+    decision = VerdictDecision.CONTINUE
+    convergence_score: int | None = None
+    remaining_disagreements: int | str | None = None
+    base_solution: str | None = None
+    modifications: str | None = None
+
     for line in verdict_xml.splitlines():
         line = line.strip()
         if line.startswith("decision:"):
             value = line.split(":", 1)[1].strip().upper()
             if "CONSENSUS" in value:
-                result["decision"] = "CONSENSUS"
+                decision = VerdictDecision.CONSENSUS
         elif line.startswith("convergence_score:"):
             try:
-                result["convergence_score"] = int(line.split(":", 1)[1].strip())
+                convergence_score = int(line.split(":", 1)[1].strip())
             except ValueError:
                 pass
         elif line.startswith("remaining_disagreements:"):
             try:
-                result["remaining_disagreements"] = int(
-                    line.split(":", 1)[1].strip()
-                )
+                remaining_disagreements = int(line.split(":", 1)[1].strip())
             except ValueError:
-                result["remaining_disagreements"] = line.split(":", 1)[1].strip()
+                remaining_disagreements = line.split(":", 1)[1].strip()
         elif line.startswith("base_solution:"):
-            result["base_solution"] = line.split(":", 1)[1].strip()
+            base_solution = line.split(":", 1)[1].strip()
         elif line.startswith("modifications:"):
-            result["modifications"] = line.split(":", 1)[1].strip()
-    return result
+            modifications = line.split(":", 1)[1].strip()
+
+    return Verdict(
+        decision=decision,
+        convergence_score=convergence_score,
+        remaining_disagreements=remaining_disagreements,
+        base_solution=base_solution,
+        modifications=modifications,
+    )
 
 
 # Re-prompt template for when extraction fails

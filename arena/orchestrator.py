@@ -5,90 +5,95 @@ and loops until the arena is complete. It is fully stateless: all progress
 lives in the state file.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import uuid
+from collections.abc import Callable
 
 from arena.api import CursorCloudAPI
 from arena.phases import step_evaluate, step_revise, step_solve, step_verify
-from arena.state import load_state, save_state
+from arena.state import ArenaState, Phase, load_state, save_state
 
 logger = logging.getLogger("arena")
 
 
-def _archive_round(state: dict, arena_dir: str) -> None:
+def _archive_round(state: ArenaState, arena_dir: str) -> None:
     """Archive the current round's outputs to disk for human review."""
-    round_dir = os.path.join(arena_dir, f"round{state['round']}")
+    round_dir = os.path.join(arena_dir, f"round{state.round}")
     os.makedirs(round_dir, exist_ok=True)
 
     uid = uuid.uuid4().hex[:8]
 
     # Archive solutions and analyses
-    for alias in state["alias_mapping"]:
+    for alias in state.alias_mapping:
         letter = alias.split("_")[1]  # "agent_a" → "a"
 
-        solution = state.get("solutions", {}).get(alias)
+        solution = state.solutions.get(alias)
         if solution:
             path = os.path.join(round_dir, f"{letter}_solution_{uid}.md")
             with open(path, "w") as f:
                 f.write(solution)
 
-        analysis = state.get("analyses", {}).get(alias)
+        analysis = state.analyses.get(alias)
         if analysis:
             path = os.path.join(round_dir, f"{letter}_analysis_{uid}.md")
             with open(path, "w") as f:
                 f.write(analysis)
 
-        critique = state.get("critiques", {}).get(alias)
+        critique = state.critiques.get(alias)
         if critique:
             path = os.path.join(round_dir, f"{letter}_critique_{uid}.md")
             with open(path, "w") as f:
                 f.write(critique)
 
     # Archive verdict if present
-    if state.get("final_verdict") and state["phase"] == "done":
-        judge_letter = state["judge_history"][-1].split("_")[1]
+    if state.final_verdict and state.phase == Phase.DONE:
+        judge_letter = state.judge_history[-1].split("_")[1]
         path = os.path.join(round_dir, f"verify_{judge_letter}_{uid}.md")
         with open(path, "w") as f:
-            f.write(state["final_verdict"])
+            f.write(state.final_verdict)
 
 
-def generate_final_report(state: dict, arena_dir: str) -> None:
+def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     """Generate a final Markdown report summarizing the arena run."""
-    consensus = state.get("consensus_reached", True)
+    consensus = state.consensus_reached if state.consensus_reached is not None else True
+    alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
+
     report_lines = [
         "# Arena Report",
         "",
-        f"**Task:** {state['task']}",
-        f"**Rounds:** {state['round']}",
+        f"**Task:** {state.config.task}",
+        f"**Rounds:** {state.round}",
         f"**Consensus:** {'Yes' if consensus else 'No'}",
-        f"**Alias mapping:** {state['alias_mapping']}",
+        f"**Alias mapping:** {alias_display}",
         "",
         "---",
         "",
         "## Final Verdict",
         "",
-        state.get("final_verdict", "N/A"),
+        state.final_verdict or "N/A",
         "",
         "---",
         "",
         "## Final Solutions",
         "",
     ]
-    for alias, solution in state.get("solutions", {}).items():
-        model = state["alias_mapping"].get(alias, "unknown")
+    for alias, solution in state.solutions.items():
+        model = state.alias_mapping.get(alias, "unknown")
         report_lines.append(f"### {alias} ({model})")
         report_lines.append("")
         report_lines.append(solution)
         report_lines.append("")
 
-    if state.get("analyses"):
+    if state.analyses:
         report_lines.append("---")
         report_lines.append("")
         report_lines.append("## Final Analyses")
         report_lines.append("")
-        for alias, analysis in state["analyses"].items():
-            model = state["alias_mapping"].get(alias, "unknown")
+        for alias, analysis in state.analyses.items():
+            model = state.alias_mapping.get(alias, "unknown")
             report_lines.append(f"### {alias} ({model})")
             report_lines.append("")
             report_lines.append(analysis)
@@ -118,24 +123,20 @@ def run_orchestrator(arena_dir: str = "arena") -> None:
         )
     api = CursorCloudAPI(api_key)
 
-    phase_handlers = {
-        "solve": step_solve,
-        "evaluate": step_evaluate,
-        "revise": step_revise,
-        "verify": step_verify,
+    phase_handlers: dict[Phase, Callable[[ArenaState, CursorCloudAPI], None]] = {
+        Phase.SOLVE: step_solve,
+        Phase.EVALUATE: step_evaluate,
+        Phase.REVISE: step_revise,
+        Phase.VERIFY: step_verify,
     }
 
-    while not state["completed"]:
-        phase = state["phase"]
+    while not state.completed:
+        phase = state.phase
         handler = phase_handlers.get(phase)
         if handler is None:
-            raise ValueError(f"Unknown phase: {phase}")
+            raise ValueError(f"Unknown or terminal phase: {phase}")
 
-        logger.info(
-            "=== Round %d | Phase: %s ===",
-            state["round"],
-            phase,
-        )
+        logger.info("=== Round %d | Phase: %s ===", state.round, phase)
         handler(state, api)
 
         # Archive after each phase transition
@@ -144,9 +145,12 @@ def run_orchestrator(arena_dir: str = "arena") -> None:
 
     generate_final_report(state, arena_dir)
 
-    consensus = state.get(
-        "consensus_reached", state.get("final_verdict") is not None
+    consensus = (
+        state.consensus_reached
+        if state.consensus_reached is not None
+        else state.final_verdict is not None
     )
-    print(f"Arena complete. Rounds: {state['round']}.")
+    alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
+    print(f"Arena complete. Rounds: {state.round}.")
     print(f"Verdict: {'Consensus reached' if consensus else 'No consensus (max rounds)'}")
-    print(f"Alias mapping: {state['alias_mapping']}")
+    print(f"Alias mapping: {alias_display}")

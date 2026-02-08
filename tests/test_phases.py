@@ -7,7 +7,7 @@ without making real API calls.
 from unittest.mock import MagicMock
 
 from arena.phases import step_evaluate, step_revise, step_solve, step_verify
-from arena.state import init_state
+from arena.state import ArenaState, Phase, ProgressStatus, init_state
 
 
 def make_mock_api(
@@ -48,20 +48,20 @@ class TestStepSolve:
         step_solve(state, api)
 
         assert api.launch.call_count == 3
-        assert len(state["agent_ids"]) == 3
-        assert state["phase"] == "evaluate"
-        for alias in state["alias_mapping"]:
-            assert alias in state["solutions"]
-            assert alias in state["analyses"]
+        assert len(state.agent_ids) == 3
+        assert state.phase == Phase.EVALUATE
+        for alias in state.alias_mapping:
+            assert alias in state.solutions
+            assert alias in state.analyses
 
     def test_skips_already_done_agents(self) -> None:
         state = init_state(task="test", repo="r")
         # Mark one agent as done
-        first_alias = list(state["alias_mapping"].keys())[0]
-        state["phase_progress"][first_alias] = "done"
-        state["agent_ids"][first_alias] = "existing-id"
-        state["solutions"][first_alias] = "existing solution"
-        state["analyses"][first_alias] = "existing analysis"
+        first_alias = list(state.alias_mapping.keys())[0]
+        state.phase_progress[first_alias] = ProgressStatus.DONE
+        state.agent_ids[first_alias] = "existing-id"
+        state.solutions[first_alias] = "existing solution"
+        state.analyses[first_alias] = "existing analysis"
 
         api = make_mock_api()
         ids = iter(["id-1", "id-2"])
@@ -80,21 +80,23 @@ class TestStepSolve:
 
         step_solve(state, api)
 
-        assert state["phase"] == "evaluate"
-        for alias in state["alias_mapping"]:
-            assert state["phase_progress"][alias] == "pending"
+        assert state.phase == Phase.EVALUATE
+        for alias in state.alias_mapping:
+            assert state.phase_progress[alias] == ProgressStatus.PENDING
 
 
 class TestStepEvaluate:
-    def _make_solved_state(self) -> dict:
+    def _make_solved_state(self) -> ArenaState:
         """Create a state that's ready for evaluate."""
         state = init_state(task="test", repo="r")
-        state["phase"] = "evaluate"
-        state["phase_progress"] = {a: "pending" for a in state["alias_mapping"]}
-        for i, alias in enumerate(state["alias_mapping"]):
-            state["agent_ids"][alias] = f"agent-{i}"
-            state["solutions"][alias] = f"Solution from {alias}"
-            state["analyses"][alias] = f"Analysis from {alias}"
+        state.phase = Phase.EVALUATE
+        state.phase_progress = {
+            a: ProgressStatus.PENDING for a in state.alias_mapping
+        }
+        for i, alias in enumerate(state.alias_mapping):
+            state.agent_ids[alias] = f"agent-{i}"
+            state.solutions[alias] = f"Solution from {alias}"
+            state.analyses[alias] = f"Analysis from {alias}"
         return state
 
     def test_sends_followups_to_all_agents(self) -> None:
@@ -108,9 +110,9 @@ class TestStepEvaluate:
         step_evaluate(state, api)
 
         assert api.followup.call_count == 3
-        assert state["phase"] == "revise"
-        for alias in state["alias_mapping"]:
-            assert alias in state["critiques"]
+        assert state.phase == Phase.REVISE
+        for alias in state.alias_mapping:
+            assert alias in state.critiques
 
     def test_transitions_to_revise_phase(self) -> None:
         state = self._make_solved_state()
@@ -122,22 +124,24 @@ class TestStepEvaluate:
 
         step_evaluate(state, api)
 
-        assert state["phase"] == "revise"
-        for alias in state["alias_mapping"]:
-            assert state["phase_progress"][alias] == "pending"
+        assert state.phase == Phase.REVISE
+        for alias in state.alias_mapping:
+            assert state.phase_progress[alias] == ProgressStatus.PENDING
 
 
 class TestStepRevise:
-    def _make_evaluated_state(self) -> dict:
+    def _make_evaluated_state(self) -> ArenaState:
         """Create a state that's ready for revise."""
         state = init_state(task="test", repo="r")
-        state["phase"] = "revise"
-        state["phase_progress"] = {a: "pending" for a in state["alias_mapping"]}
-        for i, alias in enumerate(state["alias_mapping"]):
-            state["agent_ids"][alias] = f"agent-{i}"
-            state["solutions"][alias] = f"Solution from {alias}"
-            state["analyses"][alias] = f"Analysis from {alias}"
-            state["critiques"][alias] = f"Critique from {alias}"
+        state.phase = Phase.REVISE
+        state.phase_progress = {
+            a: ProgressStatus.PENDING for a in state.alias_mapping
+        }
+        for i, alias in enumerate(state.alias_mapping):
+            state.agent_ids[alias] = f"agent-{i}"
+            state.solutions[alias] = f"Solution from {alias}"
+            state.analyses[alias] = f"Analysis from {alias}"
+            state.critiques[alias] = f"Critique from {alias}"
         return state
 
     def test_sends_followups_and_updates_solutions(self) -> None:
@@ -147,9 +151,9 @@ class TestStepRevise:
         step_revise(state, api)
 
         assert api.followup.call_count == 3
-        assert state["phase"] == "verify"
-        for alias in state["alias_mapping"]:
-            assert alias in state["solutions"]
+        assert state.phase == Phase.VERIFY
+        for alias in state.alias_mapping:
+            assert alias in state.solutions
 
     def test_transitions_to_verify_phase(self) -> None:
         state = self._make_evaluated_state()
@@ -157,21 +161,21 @@ class TestStepRevise:
 
         step_revise(state, api)
 
-        assert state["phase"] == "verify"
-        assert state["phase_progress"]["verify"] == "pending"
+        assert state.phase == Phase.VERIFY
+        assert state.phase_progress["verify"] == ProgressStatus.PENDING
 
 
 class TestStepVerify:
-    def _make_revised_state(self) -> dict:
+    def _make_revised_state(self) -> ArenaState:
         """Create a state that's ready for verify."""
         state = init_state(task="test", repo="r")
-        state["phase"] = "verify"
-        state["phase_progress"] = {"verify": "pending"}
-        for i, alias in enumerate(state["alias_mapping"]):
-            state["agent_ids"][alias] = f"agent-{i}"
-            state["solutions"][alias] = f"Revised solution from {alias}"
-            state["analyses"][alias] = f"Revised analysis from {alias}"
-            state["critiques"][alias] = f"Critique from {alias}"
+        state.phase = Phase.VERIFY
+        state.phase_progress = {"verify": ProgressStatus.PENDING}
+        for i, alias in enumerate(state.alias_mapping):
+            state.agent_ids[alias] = f"agent-{i}"
+            state.solutions[alias] = f"Revised solution from {alias}"
+            state.analyses[alias] = f"Revised analysis from {alias}"
+            state.critiques[alias] = f"Critique from {alias}"
         return state
 
     def test_consensus_completes_arena(self) -> None:
@@ -195,15 +199,14 @@ class TestStepVerify:
 
         step_verify(state, api)
 
-        assert state["completed"] is True
-        assert state["consensus_reached"] is True
-        assert state["phase"] == "done"
-        assert state["final_verdict"] is not None
-        assert len(state["judge_history"]) == 1
+        assert state.completed is True
+        assert state.consensus_reached is True
+        assert state.phase == Phase.DONE
+        assert state.final_verdict is not None
+        assert len(state.judge_history) == 1
 
     def test_continue_goes_to_next_round(self) -> None:
         state = self._make_revised_state()
-        state["max_rounds"] = 3
         verdict_response = [
             {
                 "role": "assistant",
@@ -222,14 +225,15 @@ class TestStepVerify:
 
         step_verify(state, api)
 
-        assert state["completed"] is False
-        assert state["phase"] == "evaluate"
-        assert state["round"] == 1
+        assert state.completed is False
+        assert state.phase == Phase.EVALUATE
+        assert state.round == 1
 
     def test_max_rounds_reached_completes(self) -> None:
         state = self._make_revised_state()
-        state["round"] = 3
-        state["max_rounds"] = 3
+        state.round = 3
+        # config is frozen, so recreate with max_rounds=3
+        # (init_state already defaults to 3)
         verdict_response = [
             {
                 "role": "assistant",
@@ -245,13 +249,13 @@ class TestStepVerify:
 
         step_verify(state, api)
 
-        assert state["completed"] is True
-        assert state["consensus_reached"] is False
-        assert state["phase"] == "done"
+        assert state.completed is True
+        assert state.consensus_reached is False
+        assert state.phase == Phase.DONE
 
     def test_judge_rotation(self) -> None:
         state = self._make_revised_state()
-        state["judge_history"] = []
+        state.judge_history = []
         verdict_response = [
             {
                 "role": "assistant",
@@ -267,6 +271,6 @@ class TestStepVerify:
 
         step_verify(state, api)
 
-        assert len(state["judge_history"]) == 1
-        judge = state["judge_history"][0]
-        assert judge in state["alias_mapping"]
+        assert len(state.judge_history) == 1
+        judge = state.judge_history[0]
+        assert judge in state.alias_mapping

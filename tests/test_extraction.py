@@ -4,6 +4,8 @@ import pytest
 
 from arena.extraction import (
     RETRY_PROMPT,
+    Verdict,
+    VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
     extract_xml_section,
@@ -32,6 +34,7 @@ class TestExtractXmlSection:
     def test_nested_content(self) -> None:
         text = "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
         result = extract_xml_section(text, "verdict")
+        assert result is not None
         assert "decision: CONSENSUS" in result
         assert "convergence_score: 9" in result
 
@@ -112,6 +115,23 @@ class TestExtractLatestResponse:
 
 
 # ---------------------------------------------------------------------------
+# Verdict model
+# ---------------------------------------------------------------------------
+
+
+class TestVerdictModel:
+    def test_default_is_continue(self) -> None:
+        v = Verdict()
+        assert v.decision == VerdictDecision.CONTINUE
+        assert v.convergence_score is None
+
+    def test_consensus_verdict(self) -> None:
+        v = Verdict(decision=VerdictDecision.CONSENSUS, convergence_score=9)
+        assert v.decision == VerdictDecision.CONSENSUS
+        assert v.convergence_score == 9
+
+
+# ---------------------------------------------------------------------------
 # parse_verdict
 # ---------------------------------------------------------------------------
 
@@ -129,10 +149,10 @@ class TestParseVerdict:
             "</verdict>"
         )
         verdict = parse_verdict(text)
-        assert verdict["decision"] == "CONSENSUS"
-        assert verdict["convergence_score"] == 9
-        assert verdict["remaining_disagreements"] == 0
-        assert verdict["base_solution"] == "agent_a"
+        assert verdict.decision == VerdictDecision.CONSENSUS
+        assert verdict.convergence_score == 9
+        assert verdict.remaining_disagreements == 0
+        assert verdict.base_solution == "agent_a"
 
     def test_continue_verdict(self) -> None:
         text = (
@@ -145,21 +165,21 @@ class TestParseVerdict:
             "</verdict>"
         )
         verdict = parse_verdict(text)
-        assert verdict["decision"] == "CONTINUE"
-        assert verdict["convergence_score"] == 5
-        assert verdict["remaining_disagreements"] == 3
+        assert verdict.decision == VerdictDecision.CONTINUE
+        assert verdict.convergence_score == 5
+        assert verdict.remaining_disagreements == 3
 
     def test_fallback_keyword_consensus(self) -> None:
         text = "After review, I declare CONSENSUS among all agents."
         verdict = parse_verdict(text)
-        assert verdict["decision"] == "CONSENSUS"
-        assert verdict["convergence_score"] is None
+        assert verdict.decision == VerdictDecision.CONSENSUS
+        assert verdict.convergence_score is None
 
     def test_fallback_keyword_continue(self) -> None:
         text = "There are still disagreements to resolve."
         verdict = parse_verdict(text)
-        assert verdict["decision"] == "CONTINUE"
-        assert verdict["convergence_score"] is None
+        assert verdict.decision == VerdictDecision.CONTINUE
+        assert verdict.convergence_score is None
 
     def test_malformed_score_ignored(self) -> None:
         text = (
@@ -169,8 +189,13 @@ class TestParseVerdict:
             "</verdict>"
         )
         verdict = parse_verdict(text)
-        assert verdict["decision"] == "CONSENSUS"
-        assert verdict["convergence_score"] is None
+        assert verdict.decision == VerdictDecision.CONSENSUS
+        assert verdict.convergence_score is None
+
+    def test_returns_verdict_instance(self) -> None:
+        text = "<verdict>\ndecision: CONTINUE\n</verdict>"
+        verdict = parse_verdict(text)
+        assert isinstance(verdict, Verdict)
 
 
 # ---------------------------------------------------------------------------
