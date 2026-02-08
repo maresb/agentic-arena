@@ -19,8 +19,8 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
-from arena.orchestrator import generate_final_report, run_orchestrator, step_once
-from arena.state import load_state, save_state, init_state
+from arena.orchestrator import generate_final_report, run_orchestrator, step_once  # noqa: E402
+from arena.state import load_state, save_state, init_state  # noqa: E402
 
 app = typer.Typer(
     name="arena",

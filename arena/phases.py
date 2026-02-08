@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 
 from arena.api import (
     CursorCloudAPI,
-    wait_for_agent,
     wait_for_all_agents,
     wait_for_all_followups,
     wait_for_followup,
 )
 from arena.extraction import (
+    RETRY_PROMPT,
     VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
-    extract_solution_and_analysis_from_latest,
+    extract_xml_section,
     parse_verdict,
 )
 from arena.prompts import (
@@ -36,13 +37,63 @@ from arena.state import ArenaState, Phase, ProgressStatus, save_state
 logger = logging.getLogger("arena")
 
 
+def _saver(state: ArenaState, path: str) -> Callable[[], None]:
+    """Return a zero-arg closure that persists *state* to *path*."""
+
+    def _save() -> None:
+        save_state(state, path)
+
+    return _save
+
+
+def _extract_with_retry(
+    api: CursorCloudAPI,
+    agent_id: str,
+    conversation: list[dict],
+    *,
+    max_retries: int = 1,
+) -> tuple[str, str]:
+    """Extract solution/analysis, re-prompting once if XML tags are missing.
+
+    If the initial extraction falls back to using the full response (no
+    ``<solution>`` tag found), sends :data:`RETRY_PROMPT` as a follow-up
+    and tries again.  Returns the best available result even if the retry
+    also fails.
+    """
+    solution, analysis = extract_solution_and_analysis(conversation)
+
+    for attempt in range(max_retries):
+        # If the solution tag was found, we're good
+        text = conversation[-1].get("content") or conversation[-1].get("text", "")
+        if extract_xml_section(text, "solution") is not None:
+            break
+
+        logger.warning(
+            "No <solution> tag in agent %s response (attempt %d/%d), re-prompting",
+            agent_id,
+            attempt + 1,
+            max_retries,
+        )
+        prev_count = len(conversation)
+        api.followup(agent_id=agent_id, prompt=RETRY_PROMPT)
+        wait_for_followup(api, agent_id, prev_count)
+        conversation = api.get_conversation(agent_id)
+        solution, analysis = extract_solution_and_analysis(conversation)
+
+    return solution, analysis
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: Solve (parallel)
 # ---------------------------------------------------------------------------
 
 
-def step_solve(state: ArenaState, api: CursorCloudAPI) -> None:
+def step_solve(
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+) -> None:
     """Launch agents to solve the task independently in parallel."""
+    _save = _saver(state, state_path)
+
     # Launch agents that haven't started yet
     for alias, model in state.alias_mapping.items():
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
@@ -56,7 +107,7 @@ def step_solve(state: ArenaState, api: CursorCloudAPI) -> None:
                 model=MODELS[model],
             )
             state.agent_ids[alias] = agent["id"]
-            save_state(state)
+            _save()
 
     # Poll all pending agents until finished (truly parallel)
     pending = {
@@ -67,22 +118,25 @@ def step_solve(state: ArenaState, api: CursorCloudAPI) -> None:
     if pending:
         wait_for_all_agents(api, pending)
 
-    # Extract content from all finished agents
+    # Extract content from all finished agents (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
-        solution, analysis = extract_solution_and_analysis(conversation)
+        solution, analysis = _extract_with_retry(
+            api, state.agent_ids[alias], conversation
+        )
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
-        save_state(state)
+        _save()
 
     state.phase = Phase.EVALUATE
     state.phase_progress = {
         a: ProgressStatus.PENDING for a in state.alias_mapping
     }
-    save_state(state)
+    state.sent_msg_counts = {}
+    _save()
 
 
 # ---------------------------------------------------------------------------
@@ -90,10 +144,14 @@ def step_solve(state: ArenaState, api: CursorCloudAPI) -> None:
 # ---------------------------------------------------------------------------
 
 
-def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
+def step_evaluate(
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+) -> None:
     """Each agent critiques the other two solutions without revising its own."""
-    # Send all follow-ups, recording message counts for fresh sends
-    fresh_msg_counts: dict[str, int] = {}
+    _save = _saver(state, state_path)
+
+    # Send all follow-ups, persisting message counts for resume safety
+    fresh_aliases: set[str] = set()
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -104,34 +162,27 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
         others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
-        fresh_msg_counts[alias] = len(
+        state.sent_msg_counts[alias] = len(
             api.get_conversation(state.agent_ids[alias])
         )
+        state.phase_progress[alias] = ProgressStatus.SENT
+        _save()  # Persist count BEFORE sending to survive crash
+
         logger.info("Sending evaluate follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=evaluate_prompt(others),
         )
-        state.phase_progress[alias] = ProgressStatus.SENT
-        save_state(state)
+        fresh_aliases.add(alias)
 
-    # Wait for freshly sent follow-ups (message-count based)
-    fresh_pending = {
-        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
-        for alias in fresh_msg_counts
-    }
-    if fresh_pending:
-        wait_for_all_followups(api, fresh_pending)
-
-    # Wait for resumed follow-ups from a previous run (status based)
-    resumed_pending = {
-        alias: state.agent_ids[alias]
+    # Wait for all SENT agents using persisted message counts
+    pending = {
+        alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
         if state.phase_progress.get(alias) == ProgressStatus.SENT
-        and alias not in fresh_msg_counts
     }
-    if resumed_pending:
-        wait_for_all_agents(api, resumed_pending)
+    if pending:
+        wait_for_all_followups(api, pending)
 
     # Extract critiques
     for alias in state.alias_mapping:
@@ -140,13 +191,14 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
         conversation = api.get_conversation(state.agent_ids[alias])
         state.critiques[alias] = extract_latest_response(conversation)
         state.phase_progress[alias] = ProgressStatus.DONE
-        save_state(state)
+        _save()
 
     state.phase = Phase.REVISE
     state.phase_progress = {
         a: ProgressStatus.PENDING for a in state.alias_mapping
     }
-    save_state(state)
+    state.sent_msg_counts = {}
+    _save()
 
 
 # ---------------------------------------------------------------------------
@@ -154,10 +206,13 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
 # ---------------------------------------------------------------------------
 
 
-def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
+def step_revise(
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+) -> None:
     """Each agent revises its solution based on all three critiques."""
-    # Send all follow-ups, recording message counts for fresh sends
-    fresh_msg_counts: dict[str, int] = {}
+    _save = _saver(state, state_path)
+
+    # Send all follow-ups, persisting message counts for resume safety
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -168,49 +223,44 @@ def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
         all_critiques = list(state.critiques.items())
         random.shuffle(all_critiques)
 
-        fresh_msg_counts[alias] = len(
+        state.sent_msg_counts[alias] = len(
             api.get_conversation(state.agent_ids[alias])
         )
+        state.phase_progress[alias] = ProgressStatus.SENT
+        _save()  # Persist count BEFORE sending to survive crash
+
         logger.info("Sending revise follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=revise_prompt(all_critiques),
         )
-        state.phase_progress[alias] = ProgressStatus.SENT
-        save_state(state)
 
-    # Wait for freshly sent follow-ups (message-count based)
-    fresh_pending = {
-        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
-        for alias in fresh_msg_counts
-    }
-    if fresh_pending:
-        wait_for_all_followups(api, fresh_pending)
-
-    # Wait for resumed follow-ups from a previous run (status based)
-    resumed_pending = {
-        alias: state.agent_ids[alias]
+    # Wait for all SENT agents using persisted message counts
+    pending = {
+        alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
         if state.phase_progress.get(alias) == ProgressStatus.SENT
-        and alias not in fresh_msg_counts
     }
-    if resumed_pending:
-        wait_for_all_agents(api, resumed_pending)
+    if pending:
+        wait_for_all_followups(api, pending)
 
-    # Extract revised solutions
+    # Extract revised solutions (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
-        solution, analysis = extract_solution_and_analysis_from_latest(conversation)
+        solution, analysis = _extract_with_retry(
+            api, state.agent_ids[alias], conversation
+        )
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
-        save_state(state)
+        _save()
 
     state.phase = Phase.VERIFY
     state.phase_progress = {"verify": ProgressStatus.PENDING}
-    save_state(state)
+    state.sent_msg_counts = {}
+    _save()
 
 
 # ---------------------------------------------------------------------------
@@ -218,30 +268,53 @@ def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
 # ---------------------------------------------------------------------------
 
 
-def step_verify(state: ArenaState, api: CursorCloudAPI) -> None:
-    """A rotating judge evaluates all revised solutions for consensus."""
+def step_verify(
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+) -> None:
+    """A rotating judge evaluates all revised solutions for consensus.
+
+    This phase is fully idempotent: the selected judge and pre-followup
+    message count are persisted to state *before* the follow-up is sent,
+    so a crash-and-restart will not re-select a judge or send a duplicate
+    prompt.
+    """
+    _save = _saver(state, state_path)
+
     if state.phase_progress.get("verify") == ProgressStatus.DONE:
         return
 
-    # Select judge — rotate through aliases, randomize within available
-    used = state.judge_history
-    available = [a for a in state.alias_mapping if a not in used]
-    if not available:
-        available = list(state.alias_mapping)
-    judge = random.choice(available)
-    state.judge_history.append(judge)
-    logger.info("Selected judge: %s (round %d)", judge, state.round)
+    # ── Step 1: Select judge (idempotent — only if not already chosen) ──
+    if state.verify_judge is None:
+        used = state.judge_history
+        available = [a for a in state.alias_mapping if a not in used]
+        if not available:
+            available = list(state.alias_mapping)
+        state.verify_judge = random.choice(available)
+        state.judge_history.append(state.verify_judge)
+        _save()
 
-    # Collect inputs
-    solutions = list(state.solutions.items())
-    analyses = list(state.analyses.items())
+    judge = state.verify_judge
+    logger.info("Judge for round %d: %s", state.round, judge)
 
-    prev_count = len(api.get_conversation(state.agent_ids[judge]))
-    logger.info("Sending verify follow-up to judge %s", judge)
-    api.followup(
-        agent_id=state.agent_ids[judge],
-        prompt=verify_prompt(solutions, analyses),
-    )
+    # ── Step 2: Send verdict prompt (idempotent — only if not SENT) ──
+    if state.phase_progress.get("verify") != ProgressStatus.SENT:
+        solutions = list(state.solutions.items())
+        analyses = list(state.analyses.items())
+
+        state.verify_prev_msg_count = len(
+            api.get_conversation(state.agent_ids[judge])
+        )
+        state.phase_progress["verify"] = ProgressStatus.SENT
+        _save()  # Persist BEFORE the follow-up so a crash won't re-send
+
+        logger.info("Sending verify follow-up to judge %s", judge)
+        api.followup(
+            agent_id=state.agent_ids[judge],
+            prompt=verify_prompt(solutions, analyses),
+        )
+
+    # ── Step 3: Wait for response and extract verdict ──
+    prev_count = state.verify_prev_msg_count or 0
     wait_for_followup(api, state.agent_ids[judge], prev_count)
 
     conversation = api.get_conversation(state.agent_ids[judge])
@@ -252,21 +325,41 @@ def step_verify(state: ArenaState, api: CursorCloudAPI) -> None:
         "Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score
     )
 
-    # Run optional verification commands for code tasks
+    # ── Step 4: Enforce convergence_score >= 8 for consensus ──
+    if (
+        verdict.decision == VerdictDecision.CONSENSUS
+        and verdict.convergence_score is not None
+        and verdict.convergence_score < 8
+    ):
+        logger.warning(
+            "Judge declared CONSENSUS but convergence_score=%d < 8; "
+            "overriding to CONTINUE per proposal rules",
+            verdict.convergence_score,
+        )
+        verdict.decision = VerdictDecision.CONTINUE
+
+    # ── Step 5: Run optional verification commands for code tasks ──
     if (
         state.config.verify_commands
         and verdict.decision == VerdictDecision.CONSENSUS
     ):
+        state.verify_results = []
         for cmd in state.config.verify_commands:
-            prev_count = len(api.get_conversation(state.agent_ids[judge]))
+            cmd_prev_count = len(
+                api.get_conversation(state.agent_ids[judge])
+            )
             logger.info("Running verify command via judge: %s", cmd)
             api.followup(
                 agent_id=state.agent_ids[judge],
                 prompt=f"Run this command and report the result: {cmd}",
             )
-            wait_for_followup(api, state.agent_ids[judge], prev_count)
+            wait_for_followup(api, state.agent_ids[judge], cmd_prev_count)
+            cmd_conversation = api.get_conversation(state.agent_ids[judge])
+            cmd_result = extract_latest_response(cmd_conversation)
+            state.verify_results.append(cmd_result)
+            _save()
 
-    # Determine next phase
+    # ── Step 6: Determine next phase ──
     if verdict.decision == VerdictDecision.CONSENSUS:
         state.phase = Phase.DONE
         state.completed = True
@@ -283,8 +376,11 @@ def step_verify(state: ArenaState, api: CursorCloudAPI) -> None:
         state.phase_progress = {
             a: ProgressStatus.PENDING for a in state.alias_mapping
         }
-        # Clear critiques for the new round
+        # Clear per-round transient state
         state.critiques = {}
+        state.verify_judge = None
+        state.verify_prev_msg_count = None
+        state.verify_results = []
 
     state.phase_progress["verify"] = ProgressStatus.DONE
-    save_state(state)
+    _save()

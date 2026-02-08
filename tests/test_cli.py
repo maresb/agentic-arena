@@ -91,6 +91,24 @@ class TestInitCommand:
             assert "Alias mapping" in result.output
 
 
+class TestStepCommand:
+    def test_missing_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(app, ["step", "--arena-dir", tmpdir])
+            assert result.exit_code == 1
+            assert "No arena state found" in result.output
+
+    def test_already_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task="test", repo="r")
+            state.completed = True
+            save_state(state, os.path.join(tmpdir, "state.json"))
+
+            result = runner.invoke(app, ["step", "--arena-dir", tmpdir])
+            assert result.exit_code == 0
+            assert "already completed" in result.output
+
+
 class TestStatusCommand:
     def test_shows_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

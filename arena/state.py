@@ -91,6 +91,26 @@ class ArenaState(BaseModel):
     consensus_reached: bool | None = None
     final_verdict: str | None = None
 
+    # Per-agent message counts recorded when follow-ups are sent.
+    # Used for message-count-based waiting on resume after a crash,
+    # preventing stale-message extraction when an agent is already
+    # FINISHED from a previous task.
+    #
+    # TODO: if per-agent metadata grows beyond sent_msg_counts (e.g.,
+    # tracking sent phase, retry counts), refactor into a FollowupMeta
+    # nested Pydantic model keyed by alias.
+    sent_msg_counts: dict[str, int] = Field(default_factory=dict)
+
+    # Verify-phase idempotency: persisted so a crash between sending the
+    # verify follow-up and completing extraction doesn't re-select a judge
+    # or send a duplicate prompt on restart.
+    verify_judge: str | None = None
+    verify_prev_msg_count: int | None = None
+
+    # Verify command outputs: stored as first-class data so the report
+    # can include them and failures can optionally veto consensus.
+    verify_results: list[str] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers

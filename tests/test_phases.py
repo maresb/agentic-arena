@@ -6,7 +6,13 @@ without making real API calls.
 
 from unittest.mock import MagicMock
 
-from arena.phases import step_evaluate, step_revise, step_solve, step_verify
+from arena.phases import (
+    _extract_with_retry,
+    step_evaluate,
+    step_revise,
+    step_solve,
+    step_verify,
+)
 from arena.state import ArenaState, Phase, ProgressStatus, init_state
 
 
@@ -148,6 +154,41 @@ class TestStepEvaluate:
         assert state.phase == Phase.REVISE
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
+
+    def test_persists_sent_msg_counts(self) -> None:
+        """Message counts are persisted in state for resume safety."""
+        state = self._make_solved_state()
+        api = make_mock_api(
+            conversation_response=[
+                {"role": "assistant", "content": "critique text"}
+            ]
+        )
+
+        step_evaluate(state, api)
+
+        # After completion, sent_msg_counts should be cleared at transition
+        assert state.sent_msg_counts == {}
+
+    def test_resumes_with_sent_state(self) -> None:
+        """Agents marked SENT from a previous run are waited on, not re-sent."""
+        state = self._make_solved_state()
+        first_alias = list(state.alias_mapping.keys())[0]
+        # Simulate: one agent was already sent in a previous run
+        state.phase_progress[first_alias] = ProgressStatus.SENT
+        state.sent_msg_counts[first_alias] = 0  # had 0 msgs before send
+
+        api = make_mock_api(
+            conversation_response=[
+                {"role": "assistant", "content": "critique text"}
+            ]
+        )
+
+        step_evaluate(state, api)
+
+        # Should still complete — all three agents get critiques
+        assert state.phase == Phase.REVISE
+        for alias in state.alias_mapping:
+            assert alias in state.critiques
 
 
 class TestStepRevise:
@@ -295,3 +336,177 @@ class TestStepVerify:
         assert len(state.judge_history) == 1
         judge = state.judge_history[0]
         assert judge in state.alias_mapping
+
+    def test_verify_idempotent_judge_selection(self) -> None:
+        """If verify_judge is already set, step_verify uses it (no re-selection)."""
+        state = self._make_revised_state()
+        # Pre-select a specific judge
+        state.verify_judge = "agent_a"
+        state.judge_history = ["agent_a"]
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 9\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Should still have only one entry — no duplicate append
+        assert state.judge_history == ["agent_a"]
+        assert state.completed is True
+
+    def test_verify_idempotent_sent_state(self) -> None:
+        """If verify is already SENT, step_verify skips sending the follow-up."""
+        state = self._make_revised_state()
+        state.verify_judge = "agent_a"
+        state.judge_history = ["agent_a"]
+        state.phase_progress["verify"] = ProgressStatus.SENT
+        # prev_msg_count=0 means the conversation already has a response
+        # (the agent responded to the follow-up sent in a previous run)
+        state.verify_prev_msg_count = 0
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 9\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Follow-up should NOT have been called (already sent)
+        api.followup.assert_not_called()
+        assert state.completed is True
+
+    def test_consensus_overridden_when_score_below_8(self) -> None:
+        """Judge says CONSENSUS but score < 8 => override to CONTINUE."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 6\n"
+                    "remaining_disagreements: 2\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Should NOT be consensus — score < 8
+        assert state.completed is False
+        assert state.phase == Phase.EVALUATE
+        assert state.round == 1
+
+    def test_consensus_accepted_when_score_is_8(self) -> None:
+        """Score == 8 is the threshold — should accept consensus."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 8\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.completed is True
+        assert state.consensus_reached is True
+
+    def test_verify_clears_transient_state_on_continue(self) -> None:
+        """On CONTINUE, verify_judge/verify_prev_msg_count are cleared."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONTINUE\n"
+                    "convergence_score: 4\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.verify_judge is None
+        assert state.verify_prev_msg_count is None
+        assert state.verify_results == []
+
+
+class TestExtractWithRetry:
+    def test_no_retry_when_tags_present(self) -> None:
+        """If XML tags are present, no follow-up is sent."""
+        api = make_mock_api()
+        conversation = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<solution>\n## PLAN\nStep 1\n</solution>\n"
+                    "<analysis>\n## RISKS\nNone\n</analysis>"
+                ),
+            }
+        ]
+        solution, analysis = _extract_with_retry(api, "agent-1", conversation)
+        assert "## PLAN" in solution
+        assert "## RISKS" in analysis
+        # No follow-up should have been sent
+        api.followup.assert_not_called()
+
+    def test_retry_when_tags_missing(self) -> None:
+        """If XML tags are missing, sends RETRY_PROMPT and tries again."""
+        api = MagicMock()
+        api.status.return_value = {"status": "FINISHED"}
+
+        # First call returns no tags; second returns properly tagged
+        call_count = {"n": 0}
+
+        def mock_get_conversation(agent_id: str) -> list[dict]:
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return [{"role": "assistant", "content": "plain text, no tags"}]
+            return [
+                {"role": "assistant", "content": "plain text, no tags"},
+                {"role": "user", "content": "retry prompt"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "<solution>\nRetried plan\n</solution>\n"
+                        "<analysis>\nRetried analysis\n</analysis>"
+                    ),
+                },
+            ]
+
+        api.get_conversation.side_effect = mock_get_conversation
+        api.followup.return_value = {"id": "agent-1"}
+
+        conversation = [{"role": "assistant", "content": "plain text, no tags"}]
+        solution, analysis = _extract_with_retry(api, "agent-1", conversation)
+
+        api.followup.assert_called_once()
+        assert "Retried plan" in solution
+        assert "Retried analysis" in analysis

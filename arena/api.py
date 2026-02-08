@@ -9,11 +9,16 @@ from typing import Any
 
 import requests
 
+# TODO: if more shared utilities emerge beyond is_assistant_message,
+# extract them into arena/utils.py to avoid coupling api -> extraction.
+from arena.extraction import is_assistant_message
+
 logger = logging.getLogger("arena")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 5
 BASE_BACKOFF = 2.0  # seconds
+DEFAULT_TIMEOUT = 60  # seconds per HTTP request
 
 
 class CursorCloudAPI:
@@ -26,17 +31,46 @@ class CursorCloudAPI:
 
     BASE = "https://api.cursor.com/v0"
 
-    def __init__(self, api_key: str) -> None:
-        self.auth = (api_key, "")  # Basic Auth: key as username, empty password
-        self.content_type_headers = {"Content-Type": "application/json"}
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout: int = DEFAULT_TIMEOUT,
+    ) -> None:
+        self.timeout = timeout
+        # Reuse a Session for TCP connection pooling across the many
+        # polling calls per phase.  Auth and Content-Type are set once.
+        self.session = requests.Session()
+        self.session.auth = (api_key, "")  # Basic Auth: key as username, empty password
+        self.session.headers.update({"Content-Type": "application/json"})
 
     def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        """HTTP request with retry and exponential backoff."""
-        kwargs.setdefault("auth", self.auth)
-        kwargs.setdefault("headers", self.content_type_headers)
+        """HTTP request with retry and exponential backoff.
+
+        Retries on both retryable HTTP status codes and connection-level
+        errors (``ConnectionError``, ``Timeout``).  A per-request timeout
+        prevents indefinite hangs.  Uses a persistent ``Session`` for TCP
+        connection reuse.
+        """
+        kwargs.setdefault("timeout", self.timeout)
         r: requests.Response | None = None
         for attempt in range(MAX_RETRIES):
-            r = requests.request(method, url, **kwargs)
+            try:
+                r = self.session.request(method, url, **kwargs)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                wait = BASE_BACKOFF * (2**attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "%s from %s (attempt %d/%d), waiting %.1fs",
+                    type(exc).__name__,
+                    url,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    wait,
+                )
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                time.sleep(wait)
+                continue
             if r.status_code not in RETRYABLE_STATUS_CODES:
                 r.raise_for_status()
                 return r
@@ -127,11 +161,6 @@ class CursorCloudAPI:
         return self._request(
             "GET", f"{self.BASE}/repositories"
         ).json().get("repositories", [])
-
-
-def _is_assistant_message(msg: dict) -> bool:
-    """Check if a message is from the assistant (supports both API formats)."""
-    return msg.get("type") == "assistant_message" or msg.get("role") == "assistant"
 
 
 def wait_for_agent(
@@ -230,7 +259,7 @@ def wait_for_followup(
     while time.time() - start < timeout:
         # Primary signal: new assistant message
         messages = api.get_conversation(agent_id)
-        if len(messages) > previous_msg_count and _is_assistant_message(
+        if len(messages) > previous_msg_count and is_assistant_message(
             messages[-1]
         ):
             return "FINISHED"
@@ -253,7 +282,7 @@ def wait_for_followup(
             elif time.time() >= grace_deadline:
                 # Final check before giving up
                 messages = api.get_conversation(agent_id)
-                if len(messages) > previous_msg_count and _is_assistant_message(
+                if len(messages) > previous_msg_count and is_assistant_message(
                     messages[-1]
                 ):
                     return "FINISHED"
@@ -295,7 +324,7 @@ def wait_for_all_followups(
     while remaining and time.time() - start < timeout:
         for alias, (agent_id, prev_count) in list(remaining.items()):
             messages = api.get_conversation(agent_id)
-            if len(messages) > prev_count and _is_assistant_message(
+            if len(messages) > prev_count and is_assistant_message(
                 messages[-1]
             ):
                 remaining.pop(alias)
@@ -313,7 +342,7 @@ def wait_for_all_followups(
                     grace_deadlines[alias] = time.time() + grace_period
                 elif time.time() >= grace_deadlines[alias]:
                     messages = api.get_conversation(agent_id)
-                    if len(messages) > prev_count and _is_assistant_message(
+                    if len(messages) > prev_count and is_assistant_message(
                         messages[-1]
                     ):
                         remaining.pop(alias)
