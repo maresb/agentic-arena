@@ -117,9 +117,7 @@ class TestStepEvaluate:
         """Create a state that's ready for evaluate."""
         state = init_state(task="test", repo="r")
         state.phase = Phase.EVALUATE
-        state.phase_progress = {
-            a: ProgressStatus.PENDING for a in state.alias_mapping
-        }
+        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
         for i, alias in enumerate(state.alias_mapping):
             state.agent_ids[alias] = f"agent-{i}"
             state.solutions[alias] = f"Solution from {alias}"
@@ -144,9 +142,7 @@ class TestStepEvaluate:
     def test_transitions_to_revise_phase(self) -> None:
         state = self._make_solved_state()
         api = make_mock_api(
-            conversation_response=[
-                {"role": "assistant", "content": "my critique"}
-            ]
+            conversation_response=[{"role": "assistant", "content": "my critique"}]
         )
 
         step_evaluate(state, api)
@@ -159,9 +155,7 @@ class TestStepEvaluate:
         """Message counts are persisted in state for resume safety."""
         state = self._make_solved_state()
         api = make_mock_api(
-            conversation_response=[
-                {"role": "assistant", "content": "critique text"}
-            ]
+            conversation_response=[{"role": "assistant", "content": "critique text"}]
         )
 
         step_evaluate(state, api)
@@ -178,9 +172,7 @@ class TestStepEvaluate:
         state.sent_msg_counts[first_alias] = 0  # had 0 msgs before send
 
         api = make_mock_api(
-            conversation_response=[
-                {"role": "assistant", "content": "critique text"}
-            ]
+            conversation_response=[{"role": "assistant", "content": "critique text"}]
         )
 
         step_evaluate(state, api)
@@ -196,9 +188,7 @@ class TestStepRevise:
         """Create a state that's ready for revise."""
         state = init_state(task="test", repo="r")
         state.phase = Phase.REVISE
-        state.phase_progress = {
-            a: ProgressStatus.PENDING for a in state.alias_mapping
-        }
+        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
         for i, alias in enumerate(state.alias_mapping):
             state.agent_ids[alias] = f"agent-{i}"
             state.solutions[alias] = f"Solution from {alias}"
@@ -300,10 +290,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONTINUE\n"
-                    "convergence_score: 6\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 6\n</verdict>"
                 ),
             }
         ]
@@ -322,10 +309,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONTINUE\n"
-                    "convergence_score: 5\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
                 ),
             }
         ]
@@ -347,10 +331,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONSENSUS\n"
-                    "convergence_score: 9\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
                 ),
             }
         ]
@@ -375,10 +356,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONSENSUS\n"
-                    "convergence_score: 9\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
                 ),
             }
         ]
@@ -421,10 +399,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONSENSUS\n"
-                    "convergence_score: 8\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 8\n</verdict>"
                 ),
             }
         ]
@@ -442,10 +417,7 @@ class TestStepVerify:
             {
                 "role": "assistant",
                 "content": (
-                    "<verdict>\n"
-                    "decision: CONTINUE\n"
-                    "convergence_score: 4\n"
-                    "</verdict>"
+                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 4\n</verdict>"
                 ),
             }
         ]

@@ -1,0 +1,36 @@
+# Pre-commit hooks. <https://pre-commit.com/>
+# Ruff and ty run through pixi so versions are managed in pixi.toml.
+
+ci:
+    skip: [ruff-check, ruff-format, ty]
+
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: no-commit-to-branch
+    args: [--branch=main]
+  - id: trailing-whitespace
+  - id: end-of-file-fixer
+  - id: check-merge-conflict
+  - id: check-added-large-files
+  - id: debug-statements
+
+- repo: local
+  hooks:
+  - id: ruff-check
+    name: ruff check
+    entry: pixi run ruff check --fix --unsafe-fixes --exit-non-zero-on-fix
+    language: system
+    types: [python]
+  - id: ruff-format
+    name: ruff format
+    entry: pixi run ruff format
+    language: system
+    types: [python]
+  - id: ty
+    name: ty (type checker by Astral)
+    entry: pixi run ty check
+    language: system
+    pass_filenames: false
+    types: [python]

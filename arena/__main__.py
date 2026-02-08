@@ -67,7 +67,9 @@ def init(
     task: Annotated[str, typer.Option(help="Task description for the agents to solve")],
     repo: Annotated[str, typer.Option(help="GitHub repository (owner/repo format)")],
     base_branch: Annotated[str, typer.Option(help="Base branch to work from")] = "main",
-    max_rounds: Annotated[int, typer.Option(help="Maximum evaluate-revise-verify rounds")] = 3,
+    max_rounds: Annotated[
+        int, typer.Option(help="Maximum evaluate-revise-verify rounds")
+    ] = 3,
     verify_commands: Annotated[
         str | None,
         typer.Option(help="Comma-separated commands to run during verify"),

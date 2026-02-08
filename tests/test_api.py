@@ -30,7 +30,7 @@ class TestCursorCloudAPIInit:
         mock_response.json.return_value = {"id": "agent-1"}
         mock_response.raise_for_status = MagicMock()
 
-        api.session.request = MagicMock(return_value=mock_response)
+        api.session.request = MagicMock(return_value=mock_response)  # type: ignore[assignment]
         api.launch(prompt="test", repo="owner/repo", ref="main")
         call_kwargs = api.session.request.call_args
         body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
@@ -46,7 +46,7 @@ class TestCursorCloudAPIInit:
         mock_response.json.return_value = {"id": "agent-1"}
         mock_response.raise_for_status = MagicMock()
 
-        api.session.request = MagicMock(return_value=mock_response)
+        api.session.request = MagicMock(return_value=mock_response)  # type: ignore[assignment]
         api.launch(
             prompt="test",
             repo="https://github.com/custom/repo",

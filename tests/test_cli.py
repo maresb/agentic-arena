@@ -18,9 +18,12 @@ class TestInitCommand:
                 app,
                 [
                     "init",
-                    "--task", "Review auth module",
-                    "--repo", "owner/repo",
-                    "--arena-dir", tmpdir,
+                    "--task",
+                    "Review auth module",
+                    "--repo",
+                    "owner/repo",
+                    "--arena-dir",
+                    tmpdir,
                 ],
             )
             assert result.exit_code == 0
@@ -40,11 +43,16 @@ class TestInitCommand:
                 app,
                 [
                     "init",
-                    "--task", "test",
-                    "--repo", "r",
-                    "--base-branch", "develop",
-                    "--max-rounds", "5",
-                    "--arena-dir", tmpdir,
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--base-branch",
+                    "develop",
+                    "--max-rounds",
+                    "5",
+                    "--arena-dir",
+                    tmpdir,
                 ],
             )
             assert result.exit_code == 0
@@ -60,10 +68,14 @@ class TestInitCommand:
                 app,
                 [
                     "init",
-                    "--task", "test",
-                    "--repo", "r",
-                    "--verify-commands", "pixi run pytest,pixi run mypy .",
-                    "--arena-dir", tmpdir,
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--verify-commands",
+                    "pixi run pytest,pixi run mypy .",
+                    "--arena-dir",
+                    tmpdir,
                 ],
             )
             assert result.exit_code == 0
@@ -81,9 +93,12 @@ class TestInitCommand:
                 app,
                 [
                     "init",
-                    "--task", "my task",
-                    "--repo", "owner/repo",
-                    "--arena-dir", tmpdir,
+                    "--task",
+                    "my task",
+                    "--repo",
+                    "owner/repo",
+                    "--arena-dir",
+                    tmpdir,
                 ],
             )
             assert result.exit_code == 0

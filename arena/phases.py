@@ -132,9 +132,7 @@ def step_solve(
         _save()
 
     state.phase = Phase.EVALUATE
-    state.phase_progress = {
-        a: ProgressStatus.PENDING for a in state.alias_mapping
-    }
+    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
     state.sent_msg_counts = {}
     _save()
 
@@ -162,9 +160,7 @@ def step_evaluate(
         others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
-        state.sent_msg_counts[alias] = len(
-            api.get_conversation(state.agent_ids[alias])
-        )
+        state.sent_msg_counts[alias] = len(api.get_conversation(state.agent_ids[alias]))
         state.phase_progress[alias] = ProgressStatus.SENT
         _save()  # Persist count BEFORE sending to survive crash
 
@@ -194,9 +190,7 @@ def step_evaluate(
         _save()
 
     state.phase = Phase.REVISE
-    state.phase_progress = {
-        a: ProgressStatus.PENDING for a in state.alias_mapping
-    }
+    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
     state.sent_msg_counts = {}
     _save()
 
@@ -223,9 +217,7 @@ def step_revise(
         all_critiques = list(state.critiques.items())
         random.shuffle(all_critiques)
 
-        state.sent_msg_counts[alias] = len(
-            api.get_conversation(state.agent_ids[alias])
-        )
+        state.sent_msg_counts[alias] = len(api.get_conversation(state.agent_ids[alias]))
         state.phase_progress[alias] = ProgressStatus.SENT
         _save()  # Persist count BEFORE sending to survive crash
 
@@ -301,9 +293,7 @@ def step_verify(
         solutions = list(state.solutions.items())
         analyses = list(state.analyses.items())
 
-        state.verify_prev_msg_count = len(
-            api.get_conversation(state.agent_ids[judge])
-        )
+        state.verify_prev_msg_count = len(api.get_conversation(state.agent_ids[judge]))
         state.phase_progress["verify"] = ProgressStatus.SENT
         _save()  # Persist BEFORE the follow-up so a crash won't re-send
 
@@ -321,9 +311,7 @@ def step_verify(
     verdict_text = extract_latest_response(conversation)
 
     verdict = parse_verdict(verdict_text)
-    logger.info(
-        "Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score
-    )
+    logger.info("Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score)
 
     # ── Step 4: Enforce convergence_score >= 8 for consensus ──
     if (
@@ -339,15 +327,10 @@ def step_verify(
         verdict.decision = VerdictDecision.CONTINUE
 
     # ── Step 5: Run optional verification commands for code tasks ──
-    if (
-        state.config.verify_commands
-        and verdict.decision == VerdictDecision.CONSENSUS
-    ):
+    if state.config.verify_commands and verdict.decision == VerdictDecision.CONSENSUS:
         state.verify_results = []
         for cmd in state.config.verify_commands:
-            cmd_prev_count = len(
-                api.get_conversation(state.agent_ids[judge])
-            )
+            cmd_prev_count = len(api.get_conversation(state.agent_ids[judge]))
             logger.info("Running verify command via judge: %s", cmd)
             api.followup(
                 agent_id=state.agent_ids[judge],
@@ -373,9 +356,7 @@ def step_verify(
     else:
         state.round += 1
         state.phase = Phase.EVALUATE
-        state.phase_progress = {
-            a: ProgressStatus.PENDING for a in state.alias_mapping
-        }
+        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
         # Clear per-round transient state
         state.critiques = {}
         state.verify_judge = None

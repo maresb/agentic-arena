@@ -207,5 +207,7 @@ def run_orchestrator(arena_dir: str = "arena") -> None:
     )
     alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
     print(f"Arena complete. Rounds: {state.round}.")
-    print(f"Verdict: {'Consensus reached' if consensus else 'No consensus (max rounds)'}")
+    print(
+        f"Verdict: {'Consensus reached' if consensus else 'No consensus (max rounds)'}"
+    )
     print(f"Alias mapping: {alias_display}")

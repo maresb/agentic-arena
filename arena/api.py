@@ -158,9 +158,11 @@ class CursorCloudAPI:
 
         Warning: this endpoint has strict rate limits (1/user/minute).
         """
-        return self._request(
-            "GET", f"{self.BASE}/repositories"
-        ).json().get("repositories", [])
+        return (
+            self._request("GET", f"{self.BASE}/repositories")
+            .json()
+            .get("repositories", [])
+        )
 
 
 def wait_for_agent(
@@ -208,15 +210,11 @@ def wait_for_all_agents(
                 remaining.pop(alias)
                 logger.info("Agent %s (%s) finished", alias, agent_id)
             elif status not in ("CREATING", "RUNNING"):
-                raise RuntimeError(
-                    f"Agent {agent_id} in unexpected state: {status}"
-                )
+                raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
         if remaining:
             time.sleep(poll_interval)
     if remaining:
-        raise TimeoutError(
-            f"Agents {list(remaining)} did not finish within {timeout}s"
-        )
+        raise TimeoutError(f"Agents {list(remaining)} did not finish within {timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +257,7 @@ def wait_for_followup(
     while time.time() - start < timeout:
         # Primary signal: new assistant message
         messages = api.get_conversation(agent_id)
-        if len(messages) > previous_msg_count and is_assistant_message(
-            messages[-1]
-        ):
+        if len(messages) > previous_msg_count and is_assistant_message(messages[-1]):
             return "FINISHED"
 
         # Secondary signal: agent status (for error detection + grace)
@@ -274,8 +270,7 @@ def wait_for_followup(
             if grace_deadline is None:
                 grace_deadline = time.time() + grace_period
                 logger.debug(
-                    "Agent %s FINISHED with no new messages, "
-                    "starting %ds grace period",
+                    "Agent %s FINISHED with no new messages, starting %ds grace period",
                     agent_id,
                     grace_period,
                 )
@@ -292,15 +287,11 @@ def wait_for_followup(
                     f"got {len(messages)})"
                 )
         else:
-            raise RuntimeError(
-                f"Agent {agent_id} in unexpected state: {status}"
-            )
+            raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
 
         time.sleep(poll_interval)
 
-    raise TimeoutError(
-        f"Agent {agent_id}: no new response within {timeout}s"
-    )
+    raise TimeoutError(f"Agent {agent_id}: no new response within {timeout}s")
 
 
 def wait_for_all_followups(
@@ -324,9 +315,7 @@ def wait_for_all_followups(
     while remaining and time.time() - start < timeout:
         for alias, (agent_id, prev_count) in list(remaining.items()):
             messages = api.get_conversation(agent_id)
-            if len(messages) > prev_count and is_assistant_message(
-                messages[-1]
-            ):
+            if len(messages) > prev_count and is_assistant_message(messages[-1]):
                 remaining.pop(alias)
                 grace_deadlines.pop(alias, None)
                 logger.info("Agent %s (%s) responded", alias, agent_id)
