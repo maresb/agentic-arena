@@ -4,124 +4,162 @@ This plan is derived from `TODO.md` and `TODO_IMPROVEMENTS.md`. It sequences
 work into dependency-aware phases with the required priority on UX and
 observability to improve dogfooding and reduce debugging friction.
 
-## Phase 1 — Observability & UX Feedback Loop
-**Goal:** Make long-running runs visibly alive and make artifacts readable and
-discoverable during dogfooding.
+**Validation checkpoint (applies to all phases):** Before starting any phase,
+confirm that each listed item is still open in the current codebase. If an
+item is already implemented, mark it complete and skip it to avoid rework.
 
-**Items (from TODOs):**
-- **Polling progress indicator** (TODO.md — UX and observability).
-- **Polling Visibility** (TODO_IMPROVEMENTS.md §3) — same mechanism as above;
-  implement once with shared behavior.
-- **Externalize large text from state.json** (TODO.md — UX and observability).
-- **Rearchitect the arena directory layout** (TODO.md — UX and observability).
-- **Let agents view each other's branches** (TODO.md — UX and observability).
+## Phase 1 — Observability & UX Baseline (Required First)
+**Goal:** Provide visible heartbeat and inspectable artifacts during runs.
+
+**Items (ordered, with item-level effort):**
+1. **Polling progress indicator / Polling Visibility** (TODO.md UX +
+   TODO_IMPROVEMENTS.md §3) — *Effort: S*  
+   Single implementation that prints `.` to stderr per polling interval.
+2. **Externalize large text from state.json** (TODO.md UX) — *Effort: M*  
+   Store solutions/analyses/critiques/verdicts as separate Markdown files with
+   file-path pointers in `state.json`.
+3. **Rearchitect the arena directory layout** (TODO.md UX) — *Effort: L*  
+   Move run state to `arenas/` with numbered runs and chronologically named
+   artifacts. Use a minimal chronological naming scheme here; finalize the
+   full naming spec in Phase 2.
 
 **Dependencies:** None (first phase by requirement).
 
-**Effort:** **L**
+**Effort (overall):** **L**
 
-**Rationale:** These changes make the system immediately more inspectable and
-reduce "is it hung?" uncertainty. Clear artifacts and visible progress are
-prerequisites for safely iterating on correctness and features.
+**Rationale:** These changes immediately improve dogfooding and make all later
+work easier to debug and validate.
 
 **Risks / Open Questions:**
 - Backward compatibility for existing `arena/` layouts or `state.json` formats.
 - Whether a migration path or dual-read support is required.
-- Branch discovery and naming conventions for cross-agent `git fetch`.
 
 ---
 
-## Phase 2 — Artifact Organization & Archiving Consistency
-**Goal:** Make archived artifacts stable, sortable, and aligned with the new
-arena layout.
+## Phase 2 — Artifact Naming & Archiving Consistency
+**Goal:** Make artifacts stable, sortable, and aligned with the new layout.
 
-**Items (from TODOs):**
-- **Artifact Naming & Organization** (TODO_IMPROVEMENTS.md §1).
-- **Stabilize archiving** (TODO.md — Features).
-- **Restructure phase_progress** (TODO.md — Features).
+**Items (ordered, with item-level effort):**
+1. **Artifact Naming & Organization** (TODO_IMPROVEMENTS.md §1) — *Effort: M*  
+   Adopt the round/phase/model/uid naming format and ensure sorting reflects
+   chronological order.
+2. **Stabilize archiving** (TODO.md Features) — *Effort: M*  
+   Replace UUID-per-step with per-round/per-phase archiving.
+3. **Restructure phase_progress** (TODO.md Features) — *Effort: S/M*  
+   Separate verify progress from agent alias keys for clarity.
 
-**Dependencies:** Phase 1 (new arena layout + externalized artifacts).
+**Dependencies:** Phase 1 (layout + externalized artifacts).
 
-**Effort:** **M**
+**Effort (overall):** **M**
 
-**Rationale:** With the observability foundation in place, unify naming and
-archiving so that files are predictable, sortable, and resilient to retries.
+**Rationale:** Once the directory structure exists, make the files predictable
+and resilient to retries.
 
 **Risks / Open Questions:**
 - Need to preserve or migrate older archive formats.
-- How to represent verify progress cleanly alongside per-agent progress.
 - Interaction between archive naming and externalized artifact pointers.
 
 ---
 
 ## Phase 3 — Correctness & Restart Safety
-**Goal:** Eliminate restart-related correctness bugs and enforce guardrails.
+**Goal:** Eliminate restart-related bugs and enforce guardrails.
 
-**Items (from TODOs):**
-- **save_state path bug in phases** (TODO.md — Bugs and correctness).
-- **Make verify idempotent on restart** (TODO.md + TODO_IMPROVEMENTS.md §4).
-- **Fix follow-up resume for SENT agents** (TODO.md — Bugs and correctness).
-- **Enforce consensus score >= 8 in code** (TODO.md — Bugs and correctness).
+**Items (ordered, with item-level effort):**
+1. **save_state path bug in phases** (TODO.md Bugs) — *Effort: S*  
+   Thread `state_path` through phase functions to respect `--arena-dir`.
+2. **Make verify idempotent on restart** (TODO.md Bugs +
+   TODO_IMPROVEMENTS.md §4) — *Effort: M*  
+   Persist verify-sent marker, judge ID, and previous message count.
+3. **Fix follow-up resume for SENT agents** (TODO.md Bugs) — *Effort: M*  
+   Use persisted message counts instead of status-only polling.
+4. **Enforce consensus score >= 8 in code** (TODO.md Bugs) — *Effort: S*  
+   Validate `convergence_score` and re-prompt on malformed verdicts.
 
-**Dependencies:** Phase 1 (state layout changes); Phase 2 if phase_progress or
-archiving changes affect persisted state.
+**Dependencies:** Phase 1 (state schema changes); Phase 2 if `phase_progress`
+or archiving affects persisted state.
 
-**Effort:** **M**
+**Effort (overall):** **M**
 
-**Rationale:** Correctness and idempotency are essential before deeper feature
-work; these fixes prevent duplicated prompts and inconsistent verdicts.
+**Rationale:** Correctness and idempotency are prerequisites for safe feature
+expansion and long-running arenas.
 
 **Risks / Open Questions:**
-- Precise semantics of "verify sent" markers and message counts across retries.
+- Semantics of verify markers and message counts across retries.
 - Whether consensus enforcement should reprompt or fail fast.
 
 ---
 
-## Phase 4 — Feature Expansion & Workflow Improvements
-**Goal:** Add high-value features that improve workflow flexibility and scaling.
+## Phase 4 — Workflow & Reporting Quick Wins
+**Goal:** Improve collaboration and output usability with low-to-medium effort.
 
-**Items (from TODOs):**
-- **Configurable model list** (TODO.md — Features).
-- **Treat verify-command results as first-class outputs** (TODO.md — Features).
-- **Wire RETRY_PROMPT into phases** (TODO.md — Features).
-- **Context management** (TODO.md — Features + TODO_IMPROVEMENTS.md §5).
-- **Token usage monitoring** (TODO.md — Features).
-- **Webhook support** (TODO.md — Features).
-- **Merge Strategy** (TODO_IMPROVEMENTS.md §2).
+**Items (ordered, with item-level effort):**
+1. **Merge Strategy** (TODO_IMPROVEMENTS.md §2) — *Effort: S*  
+   Print PR/compare URL for the winning branch in CLI output and `report.md`.
+2. **Let agents view each other's branches** (TODO.md UX) — *Effort: M*  
+   Use `git fetch` for sibling branches to avoid pasting large texts.
+3. **Configurable model list** (TODO.md Features) — *Effort: M*  
+   Add `--models` CLI flag with validation against available models.
+4. **Treat verify-command results as first-class outputs** (TODO.md Features)
+   — *Effort: M*  
+   Store outputs and allow advisory vs. gating modes.
+5. **Wire RETRY_PROMPT into phases** (TODO.md Features) — *Effort: S/M*  
+   Send format-reminder follow-up on missing `<solution>` tags.
 
-**Dependencies:** Phases 1–3 (observability, state/archiving stability, and
-correctness).
+**Dependencies:** Phases 1–3 (stable artifacts and restart semantics).
 
-**Effort:** **XL**
+**Effort (overall):** **L**
 
-**Rationale:** These features add flexibility and scalability but depend on a
-stable state/archiving model and reliable restart semantics.
+**Rationale:** These items deliver immediate workflow value with moderate risk,
+so they should land before large-scale scaling work.
 
 **Risks / Open Questions:**
-- API support for webhooks and model discovery constraints.
-- Trade-offs between summarization cost vs. fidelity.
+- Branch discovery conventions and permissions for cross-agent `git fetch`.
 - How verify-command gating interacts with consensus enforcement.
 
 ---
 
-## Phase 5 — Code Quality, Testing, and Infrastructure
+## Phase 5 — Scaling & Long-Run Stability
+**Goal:** Prevent context exhaustion and support larger tasks.
+
+**Items (ordered, with item-level effort):**
+1. **Context management** (TODO.md Features + TODO_IMPROVEMENTS.md §5)
+   — *Effort: XL*  
+   Summarization, diff-only views, and fresh-agent-per-round strategies.
+2. **Token usage monitoring** (TODO.md Features) — *Effort: M*  
+   Log approximate token counts per follow-up and warn near limits.
+3. **Webhook support** (TODO.md Features) — *Effort: L/XL*  
+   Replace polling if the API supports webhooks.
+
+**Dependencies:** Phases 1–4 (stable prompts, artifacts, and workflows).
+
+**Effort (overall):** **XL**
+
+**Rationale:** These are high-impact but higher-risk changes that require a
+stable base and careful validation.
+
+**Risks / Open Questions:**
+- API support and reliability for webhooks.
+- Trade-offs between summarization cost and fidelity.
+
+---
+
+## Phase 6 — Code Quality, Testing, and Infrastructure
 **Goal:** Improve maintainability, reliability, and CI confidence.
 
-**Items (from TODOs):**
-- **Remove dead code** (TODO.md — Code quality).
-- **Consolidate _is_assistant_message** (TODO.md — Code quality).
-- **Add request timeouts** (TODO.md — Code quality).
-- **Expand test coverage** (TODO.md — Code quality).
-- **Integration test harness** (TODO.md — Code quality).
-- **Cost tracking** (TODO.md — Code quality).
-- **CI pipeline** (TODO.md — Code quality).
+**Items (ordered, with item-level effort):**
+1. **Remove dead code** (TODO.md Code quality) — *Effort: S*
+2. **Consolidate _is_assistant_message** (TODO.md Code quality) — *Effort: S*
+3. **Add request timeouts** (TODO.md Code quality) — *Effort: S/M*
+4. **Expand test coverage** (TODO.md Code quality) — *Effort: M/L*
+5. **Integration test harness** (TODO.md Code quality) — *Effort: L*
+6. **Cost tracking** (TODO.md Code quality) — *Effort: M*
+7. **CI pipeline** (TODO.md Code quality) — *Effort: M*
 
-**Dependencies:** Phases 1–4 (stabilized behavior to lock into tests).
+**Dependencies:** Phases 1–5 (behaviors stabilized).
 
-**Effort:** **L**
+**Effort (overall):** **L**
 
-**Rationale:** Quality investments are most effective once core behaviors have
-stabilized; otherwise tests and CI churn frequently.
+**Rationale:** Quality investments pay off most once interfaces stabilize.
 
 **Risks / Open Questions:**
 - Availability of a stable test API environment for integration tests.
@@ -129,21 +167,21 @@ stabilized; otherwise tests and CI churn frequently.
 
 ---
 
-## Phase 6 — Documentation & Runbook
+## Phase 7 — Documentation & Runbook
 **Goal:** Ensure users and operators can run, debug, and trust the system.
 
-**Items (from TODOs):**
-- **Update README "Current state"** (TODO.md — Documentation).
-- **Document Basic Auth, model availability, restart semantics, verify-command
-  behavior** (TODO.md — Documentation).
-- **Add a runbook / troubleshooting section** (TODO.md — Documentation).
+**Items (ordered, with item-level effort):**
+1. **Update README "Current state"** (TODO.md Documentation) — *Effort: S*
+2. **Document Basic Auth, model availability, restart semantics, verify-command
+   behavior** (TODO.md Documentation) — *Effort: S*
+3. **Add a runbook / troubleshooting section** (TODO.md Documentation)
+   — *Effort: S*
 
-**Dependencies:** Phases 1–5 (features and behaviors documented).
+**Dependencies:** Phases 1–6 (final behaviors documented).
 
-**Effort:** **S**
+**Effort (overall):** **S**
 
-**Rationale:** Documentation must reflect the final behavior after the earlier
-phases land.
+**Rationale:** Documentation must reflect the final system behavior.
 
 **Risks / Open Questions:**
 - Any additional operational guidance needed after webhook support or CI.
