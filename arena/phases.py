@@ -397,6 +397,7 @@ def step_verify(
             )
             wait_for_followup(api, state.agent_ids[judge], cmd_prev_count)
             cmd_conversation = api.get_conversation(state.agent_ids[judge])
+            _update_token_usage(state, judge, cmd_conversation)
             cmd_result = extract_latest_response(cmd_conversation)
             state.verify_results.append(cmd_result)
             _save()
