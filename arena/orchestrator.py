@@ -168,7 +168,7 @@ def step_once(arena_dir: str = "arena") -> ArenaState:
 
     api = _make_api()
     logger.info("=== Round %d | Phase: %s ===", state.round, before_phase)
-    handler(state, api)
+    handler(state, api, state_path=state_path)
 
     _archive_round(state, arena_dir)
     save_state(state, state_path)
