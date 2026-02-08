@@ -54,6 +54,15 @@ def extract_xml_section(text: str, tag: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def is_assistant_message(msg: dict) -> bool:
+    """Check if a conversation message is from the assistant.
+
+    Supports both the real Cloud Agents API format (``type: assistant_message``)
+    and the legacy mock format (``role: assistant``).
+    """
+    return msg.get("type") == "assistant_message" or msg.get("role") == "assistant"
+
+
 def _get_latest_assistant_message(conversation: list[dict]) -> str:
     """Find the last assistant message in a conversation.
 
@@ -61,12 +70,13 @@ def _get_latest_assistant_message(conversation: list[dict]) -> str:
     mock format (``role``/``content``) so existing tests keep working.
     """
     for msg in reversed(conversation):
+        if not is_assistant_message(msg):
+            continue
         # Real Cloud Agents API format
         if msg.get("type") == "assistant_message":
             return msg.get("text", "")
         # Legacy / mock format
-        if msg.get("role") == "assistant":
-            return msg.get("content", "")
+        return msg.get("content", "")
     raise ValueError("No assistant message found in conversation")
 
 

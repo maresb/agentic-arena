@@ -9,6 +9,8 @@ from typing import Any
 
 import requests
 
+from arena.extraction import is_assistant_message
+
 logger = logging.getLogger("arena")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -129,11 +131,6 @@ class CursorCloudAPI:
         ).json().get("repositories", [])
 
 
-def _is_assistant_message(msg: dict) -> bool:
-    """Check if a message is from the assistant (supports both API formats)."""
-    return msg.get("type") == "assistant_message" or msg.get("role") == "assistant"
-
-
 def wait_for_agent(
     api: CursorCloudAPI,
     agent_id: str,
@@ -230,7 +227,7 @@ def wait_for_followup(
     while time.time() - start < timeout:
         # Primary signal: new assistant message
         messages = api.get_conversation(agent_id)
-        if len(messages) > previous_msg_count and _is_assistant_message(
+        if len(messages) > previous_msg_count and is_assistant_message(
             messages[-1]
         ):
             return "FINISHED"
@@ -253,7 +250,7 @@ def wait_for_followup(
             elif time.time() >= grace_deadline:
                 # Final check before giving up
                 messages = api.get_conversation(agent_id)
-                if len(messages) > previous_msg_count and _is_assistant_message(
+                if len(messages) > previous_msg_count and is_assistant_message(
                     messages[-1]
                 ):
                     return "FINISHED"
@@ -295,7 +292,7 @@ def wait_for_all_followups(
     while remaining and time.time() - start < timeout:
         for alias, (agent_id, prev_count) in list(remaining.items()):
             messages = api.get_conversation(agent_id)
-            if len(messages) > prev_count and _is_assistant_message(
+            if len(messages) > prev_count and is_assistant_message(
                 messages[-1]
             ):
                 remaining.pop(alias)
@@ -313,7 +310,7 @@ def wait_for_all_followups(
                     grace_deadlines[alias] = time.time() + grace_period
                 elif time.time() >= grace_deadlines[alias]:
                     messages = api.get_conversation(agent_id)
-                    if len(messages) > prev_count and _is_assistant_message(
+                    if len(messages) > prev_count and is_assistant_message(
                         messages[-1]
                     ):
                         remaining.pop(alias)
