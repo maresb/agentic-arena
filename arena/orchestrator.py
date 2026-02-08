@@ -130,6 +130,22 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append(analysis)
             report_lines.append("")
 
+    if state.verify_results:
+        report_lines.append("---")
+        report_lines.append("")
+        report_lines.append("## Verify Command Results")
+        report_lines.append("")
+        for i, result in enumerate(state.verify_results):
+            cmd = (
+                state.config.verify_commands[i]
+                if i < len(state.config.verify_commands)
+                else f"command {i + 1}"
+            )
+            report_lines.append(f"### `{cmd}`")
+            report_lines.append("")
+            report_lines.append(result)
+            report_lines.append("")
+
     report_path = os.path.join(arena_dir, "report.md")
     with open(report_path, "w") as f:
         f.write("\n".join(report_lines))
