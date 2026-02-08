@@ -17,21 +17,26 @@ BASE_BACKOFF = 2.0  # seconds
 
 
 class CursorCloudAPI:
-    """HTTP client for the Cursor Cloud Agents API."""
+    """HTTP client for the Cursor Cloud Agents API.
+
+    Authentication uses HTTP Basic Auth with the API key as the username
+    and an empty password, per the official docs:
+    https://cursor.com/docs/api#basic-authentication
+    """
 
     BASE = "https://api.cursor.com/v0"
 
     def __init__(self, api_key: str) -> None:
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        self.auth = (api_key, "")  # Basic Auth: key as username, empty password
+        self.content_type_headers = {"Content-Type": "application/json"}
 
     def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
         """HTTP request with retry and exponential backoff."""
+        kwargs.setdefault("auth", self.auth)
+        kwargs.setdefault("headers", self.content_type_headers)
         r: requests.Response | None = None
         for attempt in range(MAX_RETRIES):
-            r = requests.request(method, url, headers=self.headers, **kwargs)
+            r = requests.request(method, url, **kwargs)
             if r.status_code not in RETRYABLE_STATUS_CODES:
                 r.raise_for_status()
                 return r
@@ -56,7 +61,16 @@ class CursorCloudAPI:
         ref: str,
         model: str | None = None,
     ) -> dict:
-        """Launch a new cloud agent with the given prompt and repo context."""
+        """Launch a new cloud agent with the given prompt and repo context.
+
+        Parameters
+        ----------
+        repo:
+            Full GitHub URL (``https://github.com/owner/repo``) or
+            shorthand ``owner/repo`` (automatically expanded).
+        """
+        if not repo.startswith("https://"):
+            repo = f"https://github.com/{repo}"
         body: dict = {
             "prompt": {"text": prompt},
             "source": {"repository": repo, "ref": ref},
@@ -81,6 +95,38 @@ class CursorCloudAPI:
         """Retrieve the full conversation history for an agent."""
         r = self._request("GET", f"{self.BASE}/agents/{agent_id}/conversation")
         return r.json().get("messages", [])
+
+    def stop(self, agent_id: str) -> dict:
+        """Stop a running agent (can be resumed with a follow-up)."""
+        return self._request("POST", f"{self.BASE}/agents/{agent_id}/stop").json()
+
+    def delete(self, agent_id: str) -> dict:
+        """Permanently delete an agent."""
+        return self._request("DELETE", f"{self.BASE}/agents/{agent_id}").json()
+
+    def list_agents(self, limit: int = 20, cursor: str | None = None) -> dict:
+        """List all cloud agents for the authenticated user."""
+        params: dict[str, str | int] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        return self._request("GET", f"{self.BASE}/agents", params=params).json()
+
+    def me(self) -> dict:
+        """Retrieve information about the current API key."""
+        return self._request("GET", f"{self.BASE}/me").json()
+
+    def list_models(self) -> list[str]:
+        """Retrieve the list of recommended models for cloud agents."""
+        return self._request("GET", f"{self.BASE}/models").json().get("models", [])
+
+    def list_repositories(self) -> list[dict]:
+        """List GitHub repositories accessible to the authenticated user.
+
+        Warning: this endpoint has strict rate limits (1/user/minute).
+        """
+        return self._request(
+            "GET", f"{self.BASE}/repositories"
+        ).json().get("repositories", [])
 
 
 def wait_for_agent(
