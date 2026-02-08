@@ -38,10 +38,15 @@ third-party providers).
    ([direct link](https://cursor.com/dashboard?tab=integrations)).
 3. Click **Create New API Key**, give it a name, and copy the generated key.
    You will not be able to see the key again after leaving the page.
-4. Export the key in your shell:
+4. Export the key in your shell **or** put it in a `.env` file at the project
+   root (already gitignored):
 
 ```bash
+# Option A: environment variable
 export CURSOR_API_KEY="key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Option B: .env file
+echo 'CURSOR_API_KEY=key_xxx...' > .env
 ```
 
 > **Note:** Free-plan API keys do **not** support the Cloud Agents API. You

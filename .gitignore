@@ -26,3 +26,6 @@ Thumbs.db
 # pytest
 .pytest_cache/
 .mypy_cache/
+
+# Environment variables
+.env

@@ -14,6 +14,9 @@ import sys
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
 from arena.orchestrator import run_orchestrator
 from arena.state import load_state, save_state, init_state
