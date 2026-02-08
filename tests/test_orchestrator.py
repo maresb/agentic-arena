@@ -67,6 +67,27 @@ class TestGenerateFinalReport:
                 content = f.read()
             assert "alias_mapping" in content.lower() or "Alias mapping" in content
 
+    def test_report_includes_verify_results(self) -> None:
+        state = init_state(
+            task="test",
+            repo="r",
+            verify_commands=["pixi run pytest", "pixi run mypy ."],
+        )
+        state.final_verdict = "All good"
+        state.solutions = {"agent_a": "Sol"}
+        state.analyses = {}
+        state.verify_results = ["All tests passed", "No type errors"]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate_final_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Verify Command Results" in content
+            assert "pixi run pytest" in content
+            assert "All tests passed" in content
+            assert "pixi run mypy ." in content
+            assert "No type errors" in content
+
 
 class TestArchiveRound:
     def test_archives_solutions_and_analyses(self) -> None:

@@ -75,6 +75,12 @@ class TestInitState:
         assert state.critiques == {}
         assert state.agent_ids == {}
         assert state.judge_history == []
+        assert state.verify_results == []
+
+    def test_verify_idempotency_fields_default_none(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.verify_judge is None
+        assert state.verify_prev_msg_count is None
 
 
 class TestSaveAndLoad:

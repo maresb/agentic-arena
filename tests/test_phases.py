@@ -302,6 +302,126 @@ class TestStepVerify:
         judge = state.judge_history[0]
         assert judge in state.alias_mapping
 
+    def test_verify_idempotent_judge_selection(self) -> None:
+        """If verify_judge is already set, step_verify uses it (no re-selection)."""
+        state = self._make_revised_state()
+        # Pre-select a specific judge
+        state.verify_judge = "agent_a"
+        state.judge_history = ["agent_a"]
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 9\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Should still have only one entry — no duplicate append
+        assert state.judge_history == ["agent_a"]
+        assert state.completed is True
+
+    def test_verify_idempotent_sent_state(self) -> None:
+        """If verify is already SENT, step_verify skips sending the follow-up."""
+        state = self._make_revised_state()
+        state.verify_judge = "agent_a"
+        state.judge_history = ["agent_a"]
+        state.phase_progress["verify"] = ProgressStatus.SENT
+        # prev_msg_count=0 means the conversation already has a response
+        # (the agent responded to the follow-up sent in a previous run)
+        state.verify_prev_msg_count = 0
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 9\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Follow-up should NOT have been called (already sent)
+        api.followup.assert_not_called()
+        assert state.completed is True
+
+    def test_consensus_overridden_when_score_below_8(self) -> None:
+        """Judge says CONSENSUS but score < 8 => override to CONTINUE."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 6\n"
+                    "remaining_disagreements: 2\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        # Should NOT be consensus — score < 8
+        assert state.completed is False
+        assert state.phase == Phase.EVALUATE
+        assert state.round == 1
+
+    def test_consensus_accepted_when_score_is_8(self) -> None:
+        """Score == 8 is the threshold — should accept consensus."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONSENSUS\n"
+                    "convergence_score: 8\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.completed is True
+        assert state.consensus_reached is True
+
+    def test_verify_clears_transient_state_on_continue(self) -> None:
+        """On CONTINUE, verify_judge/verify_prev_msg_count are cleared."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\n"
+                    "decision: CONTINUE\n"
+                    "convergence_score: 4\n"
+                    "</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.verify_judge is None
+        assert state.verify_prev_msg_count is None
+        assert state.verify_results == []
+
 
 class TestExtractWithRetry:
     def test_no_retry_when_tags_present(self) -> None:
