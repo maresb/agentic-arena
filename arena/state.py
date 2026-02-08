@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import random
+import re
 import tempfile
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -144,20 +146,22 @@ _EXTERNALIZABLE_LIST_FIELDS = ("verify_results",)
 def _resolve_file_ref(value: str, base_dir: str) -> str:
     """If *value* is a ``file:`` reference, read and return the file content.
 
-    Path traversal is prevented by ensuring the resolved path stays within
-    *base_dir*.
+    Path traversal is prevented by resolving both *base_dir* and the
+    joined path to absolute paths, then checking containment with
+    :meth:`pathlib.Path.is_relative_to`.
     """
     if value.startswith(_FILE_REF_PREFIX):
         rel = value[len(_FILE_REF_PREFIX) :]
-        file_path = os.path.normpath(os.path.join(base_dir, rel))
-        abs_base = os.path.normpath(base_dir)
-        if not file_path.startswith(abs_base + os.sep) and file_path != abs_base:
+        resolved_base = Path(base_dir).resolve()
+        resolved_path = (resolved_base / rel).resolve()
+        if not resolved_path.is_relative_to(resolved_base):
             logger.warning("Path traversal blocked: %s", rel)
             return ""
-        if os.path.exists(file_path):
-            with open(file_path) as f:
-                return f.read()
-        logger.warning("Externalized file %s not found; using empty string", file_path)
+        if resolved_path.exists():
+            return resolved_path.read_text()
+        logger.warning(
+            "Externalized file %s not found; using empty string", resolved_path
+        )
         return ""
     return value
 
@@ -175,8 +179,24 @@ def _write_artifact(content: str, artifact_path: str) -> None:
         try:
             os.unlink(tmp)
         except OSError:
+            # Best-effort cleanup: ignore errors when deleting the temp file.
             pass
         raise
+
+
+def sanitize_filename_component(name: str) -> str:
+    """Sanitize a string for safe use as a filename component.
+
+    Replaces path separators, ``..``, and other unsafe characters with
+    underscores.  Returns ``"_"`` if the result would be empty.
+    """
+    # Replace path separators and null bytes
+    sanitized = re.sub(r"[/\\:\x00]", "_", name)
+    # Collapse any ".." sequences
+    sanitized = sanitized.replace("..", "_")
+    # Strip leading/trailing whitespace and dots
+    sanitized = sanitized.strip(" .")
+    return sanitized or "_"
 
 
 def load_state(path: str = "arena/state.json") -> ArenaState | None:
@@ -231,7 +251,8 @@ def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
         d = dump.get(field_name, {})
         for key, value in d.items():
             if value:
-                rel = f"artifacts/{field_name}_{key}.md"
+                safe_key = sanitize_filename_component(key)
+                rel = f"artifacts/{field_name}_{safe_key}.md"
                 _write_artifact(value, os.path.join(parent, rel))
                 d[key] = f"{_FILE_REF_PREFIX}{rel}"
 
