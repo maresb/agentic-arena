@@ -8,8 +8,8 @@ observability to improve dogfooding and reduce debugging friction.
 confirm that each listed item is still open in the current codebase. If an
 item is already implemented, mark it complete and skip it to avoid rework.
 
-## Phase 1 — Observability & UX Baseline (Required First)
-**Goal:** Provide visible heartbeat and inspectable artifacts during runs.
+## Phase 1 — Observability & UX Baseline (Mandatory)
+**Goal:** Provide a visible heartbeat and inspectable artifacts during runs.
 
 **Items (ordered, with item-level effort):**
 1. **Polling progress indicator / Polling Visibility** (TODO.md UX +
@@ -48,7 +48,8 @@ work easier to debug and validate.
 3. **Restructure phase_progress** (TODO.md Features) — *Effort: S/M*  
    Separate verify progress from agent alias keys for clarity.
 
-**Dependencies:** Phase 1 (layout + externalized artifacts).
+**Dependencies:** Phase 1 (layout + externalized artifacts). Archiving changes
+depend on the new directory structure.
 
 **Effort (overall):** **M**
 
@@ -61,7 +62,7 @@ and resilient to retries.
 
 ---
 
-## Phase 3 — Correctness & Restart Safety
+## Phase 3 — Reliability & Correctness
 **Goal:** Eliminate restart-related bugs and enforce guardrails.
 
 **Items (ordered, with item-level effort):**
@@ -89,7 +90,7 @@ expansion and long-running arenas.
 
 ---
 
-## Phase 4 — Workflow & Reporting Quick Wins
+## Phase 4 — Workflow & Collaboration Quick Wins
 **Goal:** Improve collaboration and output usability with low-to-medium effort.
 
 **Items (ordered, with item-level effort):**
@@ -150,16 +151,17 @@ stable base and careful validation.
 1. **Remove dead code** (TODO.md Code quality) — *Effort: S*
 2. **Consolidate _is_assistant_message** (TODO.md Code quality) — *Effort: S*
 3. **Add request timeouts** (TODO.md Code quality) — *Effort: S/M*
-4. **Expand test coverage** (TODO.md Code quality) — *Effort: M/L*
-5. **Integration test harness** (TODO.md Code quality) — *Effort: L*
-6. **Cost tracking** (TODO.md Code quality) — *Effort: M*
-7. **CI pipeline** (TODO.md Code quality) — *Effort: M*
+4. **CI pipeline** (TODO.md Code quality) — *Effort: M*
+5. **Expand test coverage** (TODO.md Code quality) — *Effort: M/L*
+6. **Integration test harness** (TODO.md Code quality) — *Effort: L*
+7. **Cost tracking** (TODO.md Code quality) — *Effort: M*
 
 **Dependencies:** Phases 1–5 (behaviors stabilized).
 
 **Effort (overall):** **L**
 
-**Rationale:** Quality investments pay off most once interfaces stabilize.
+**Rationale:** Quality investments pay off most once interfaces stabilize; CI
+should land before test expansion to shorten feedback loops.
 
 **Risks / Open Questions:**
 - Availability of a stable test API environment for integration tests.
