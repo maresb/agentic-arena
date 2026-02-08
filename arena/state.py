@@ -69,6 +69,9 @@ class ArenaConfig(BaseModel, frozen=True):
     base_branch: str = "main"
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
+    models: list[str] = Field(default_factory=lambda: list(ModelName))
+    branch_only: bool = False
+    verify_mode: str = "advisory"  # "advisory" or "gating"
 
 
 class ArenaState(BaseModel):
@@ -243,17 +246,33 @@ def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
 # ---------------------------------------------------------------------------
 
 
+def _aliases_for_count(n: int) -> list[str]:
+    """Generate alias names for *n* agents: agent_a, agent_b, ..., agent_z."""
+    return [f"agent_{chr(ord('a') + i)}" for i in range(n)]
+
+
 def init_state(
     task: str,
     repo: str,
     base_branch: str = "main",
     max_rounds: int = 3,
     verify_commands: list[str] | None = None,
+    models: list[str] | None = None,
+    branch_only: bool = False,
+    verify_mode: str = "advisory",
 ) -> ArenaState:
-    """Create a fresh arena state with randomized alias-to-model mapping."""
-    models = list(ModelName)
-    random.shuffle(models)
-    aliases = list(ALIASES)
+    """Create a fresh arena state with randomized alias-to-model mapping.
+
+    Parameters
+    ----------
+    models:
+        Optional list of model short names (e.g. ``["opus", "gpt"]``).
+        Defaults to all :class:`ModelName` values.  Dynamically sizes
+        the alias list to match.
+    """
+    model_list = list(models) if models else list(ModelName)
+    random.shuffle(model_list)
+    aliases = _aliases_for_count(len(model_list))
 
     config = ArenaConfig(
         task=task,
@@ -261,10 +280,13 @@ def init_state(
         base_branch=base_branch,
         max_rounds=max_rounds,
         verify_commands=verify_commands or [],
+        models=model_list,
+        branch_only=branch_only,
+        verify_mode=verify_mode,
     )
 
     return ArenaState(
         config=config,
-        alias_mapping=dict(zip(aliases, models)),
+        alias_mapping={a: m for a, m in zip(aliases, model_list)},
         phase_progress={a: ProgressStatus.PENDING for a in aliases},
     )

@@ -173,6 +173,38 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append(result)
             report_lines.append("")
 
+    # Print PR URL for the winning branch if available
+    if state.consensus_reached and state.branch_names:
+        # Determine winner from verdict's base_solution field or first alias
+        from arena.extraction import parse_verdict
+
+        winner_alias = None
+        if state.final_verdict:
+            verdict = parse_verdict(state.final_verdict)
+            if verdict.base_solution and verdict.base_solution in state.branch_names:
+                winner_alias = verdict.base_solution
+        if not winner_alias:
+            winner_alias = next(iter(state.branch_names), None)
+
+        if winner_alias and winner_alias in state.branch_names:
+            branch = state.branch_names[winner_alias]
+            repo = state.config.repo
+            if not repo.startswith("https://"):
+                repo_url = f"https://github.com/{repo}"
+            else:
+                repo_url = repo
+            pr_url = f"{repo_url}/compare/{state.config.base_branch}...{branch}?expand=1"
+            report_lines.append("---")
+            report_lines.append("")
+            report_lines.append("## Merge Winner")
+            report_lines.append("")
+            report_lines.append(
+                f"**Winner:** {winner_alias} "
+                f"({state.alias_mapping.get(winner_alias, 'unknown')})"
+            )
+            report_lines.append(f"**PR URL:** {pr_url}")
+            report_lines.append("")
+
     report_path = os.path.join(arena_dir, "report.md")
     with open(report_path, "w") as f:
         f.write("\n".join(report_lines))

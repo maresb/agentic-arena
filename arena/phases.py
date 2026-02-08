@@ -104,7 +104,7 @@ def step_solve(
                 prompt=solve_prompt(state.config.task),
                 repo=state.config.repo,
                 ref=state.config.base_branch,
-                model=MODELS[model],
+                model=MODELS.get(model, model),
             )
             state.agent_ids[alias] = agent["id"]
             # Capture branch name if returned by the API
@@ -159,7 +159,14 @@ def step_evaluate(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
 
-        others = [(k, v) for k, v in state.solutions.items() if k != alias]
+        if state.config.branch_only and state.branch_names:
+            others = [
+                (k, "(See branch — use git fetch to inspect)")
+                for k in state.solutions
+                if k != alias
+            ]
+        else:
+            others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
         if state.phase_progress.get(alias) == ProgressStatus.SENT:
@@ -357,6 +364,7 @@ def step_verify(
         verdict.decision = VerdictDecision.CONTINUE
 
     # ── Step 5: Run optional verification commands for code tasks ──
+    verify_failed = False
     if state.config.verify_commands and verdict.decision == VerdictDecision.CONSENSUS:
         state.verify_results = []
         for cmd in state.config.verify_commands:
@@ -371,6 +379,18 @@ def step_verify(
             cmd_result = extract_latest_response(cmd_conversation)
             state.verify_results.append(cmd_result)
             _save()
+            # Detect failure keywords in result
+            lower = cmd_result.lower()
+            if any(kw in lower for kw in ("fail", "error", "exception", "exit code")):
+                verify_failed = True
+                logger.warning("Verify command '%s' appears to have failed", cmd)
+
+        # In gating mode, override consensus when verify commands fail
+        if verify_failed and state.config.verify_mode == "gating":
+            logger.warning(
+                "Verify commands failed in gating mode; overriding CONSENSUS to CONTINUE"
+            )
+            verdict.decision = VerdictDecision.CONTINUE
 
     # ── Step 6: Determine next phase ──
     if verdict.decision == VerdictDecision.CONSENSUS:

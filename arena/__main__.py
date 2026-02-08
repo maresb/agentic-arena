@@ -74,12 +74,28 @@ def init(
         str | None,
         typer.Option(help="Comma-separated commands to run during verify"),
     ] = None,
+    models: Annotated[
+        str | None,
+        typer.Option(help="Comma-separated model list (e.g. opus,gpt). Defaults to all."),
+    ] = None,
+    branch_only: Annotated[
+        bool,
+        typer.Option(
+            "--branch-only",
+            help="Omit pasted solutions in prompts; agents must git fetch branches.",
+        ),
+    ] = False,
+    verify_mode: Annotated[
+        str,
+        typer.Option(help="Verify command mode: 'advisory' (default) or 'gating'"),
+    ] = "advisory",
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
     ] = DEFAULT_ARENA_DIR,
 ) -> None:
     """Initialize a new arena run."""
     parsed_commands = verify_commands.split(",") if verify_commands else None
+    parsed_models = [m.strip() for m in models.split(",")] if models else None
 
     state = init_state(
         task=task,
@@ -87,6 +103,9 @@ def init(
         base_branch=base_branch,
         max_rounds=max_rounds,
         verify_commands=parsed_commands,
+        models=parsed_models,
+        branch_only=branch_only,
+        verify_mode=verify_mode,
     )
     state_path = os.path.join(arena_dir, "state.json")
     save_state(state, state_path)
