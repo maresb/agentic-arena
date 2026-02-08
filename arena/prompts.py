@@ -6,6 +6,32 @@ Presentation order is shuffled to prevent positional bias.
 
 import random
 
+
+# ---------------------------------------------------------------------------
+# Branch hint block (Phase 0 — agent branch visibility)
+# ---------------------------------------------------------------------------
+def _branch_hint_block(branch_names: dict[str, str] | None) -> str:
+    """Return a prompt block listing agent branch names for cross-inspection.
+
+    Returns an empty string when *branch_names* is ``None`` or empty,
+    keeping prompts backward-compatible.
+    """
+    if not branch_names:
+        return ""
+    lines = [
+        "",
+        "--- Agent Branches ---",
+        "Each agent's full work is committed to their branch. "
+        "If a summary above seems incomplete, run "
+        "`git fetch origin <branch>` and inspect their commits.",
+        "",
+    ]
+    for alias, branch in sorted(branch_names.items()):
+        label = alias.replace("_", " ").upper()
+        lines.append(f"  {label}: {branch}")
+    lines.append("")
+    return "\n".join(lines)
+
 # ---------------------------------------------------------------------------
 # Model identifier mapping (alias → Cursor API model name)
 # ---------------------------------------------------------------------------
@@ -62,13 +88,19 @@ Then state your position:
 """
 
 
-def evaluate_prompt(others: list[tuple[str, str]]) -> str:
+def evaluate_prompt(
+    others: list[tuple[str, str]],
+    *,
+    branch_names: dict[str, str] | None = None,
+) -> str:
     """Generate the evaluate prompt with shuffled presentation order.
 
     Parameters
     ----------
     others:
         List of (alias, solution_text) tuples for the other two agents.
+    branch_names:
+        Optional mapping of alias → branch name for cross-inspection.
     """
     shuffled = list(others)
     random.shuffle(shuffled)
@@ -77,7 +109,8 @@ def evaluate_prompt(others: list[tuple[str, str]]) -> str:
         label = alias.replace("_", " ").upper()
         blocks.append(f"=== {label} ===\n{solution}")
     solutions_block = "\n\n".join(blocks)
-    return EVALUATE_TEMPLATE.format(solutions_block=solutions_block)
+    text = EVALUATE_TEMPLATE.format(solutions_block=solutions_block)
+    return text + _branch_hint_block(branch_names)
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +136,19 @@ with the other approaches, or "None."
 """
 
 
-def revise_prompt(all_critiques: list[tuple[str, str]]) -> str:
+def revise_prompt(
+    all_critiques: list[tuple[str, str]],
+    *,
+    branch_names: dict[str, str] | None = None,
+) -> str:
     """Generate the revise prompt with shuffled critique order.
 
     Parameters
     ----------
     all_critiques:
         List of (alias, critique_text) tuples for all three agents.
+    branch_names:
+        Optional mapping of alias → branch name for cross-inspection.
     """
     shuffled = list(all_critiques)
     random.shuffle(shuffled)
@@ -118,7 +157,8 @@ def revise_prompt(all_critiques: list[tuple[str, str]]) -> str:
         label = alias.replace("_", " ").upper()
         blocks.append(f"=== CRITIQUE BY {label} ===\n{critique}")
     critiques_block = "\n\n".join(blocks)
-    return REVISE_TEMPLATE.format(critiques_block=critiques_block)
+    text = REVISE_TEMPLATE.format(critiques_block=critiques_block)
+    return text + _branch_hint_block(branch_names)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +213,8 @@ that need resolution in the next round.
 def verify_prompt(
     solutions: list[tuple[str, str]],
     analyses: list[tuple[str, str]],
+    *,
+    branch_names: dict[str, str] | None = None,
 ) -> str:
     """Generate the verify prompt with shuffled solution order.
 
@@ -182,6 +224,8 @@ def verify_prompt(
         List of (alias, solution_text) tuples.
     analyses:
         List of (alias, analysis_text) tuples.
+    branch_names:
+        Optional mapping of alias → branch name for cross-inspection.
     """
     shuffled_solutions = list(solutions)
     random.shuffle(shuffled_solutions)
@@ -201,7 +245,8 @@ def verify_prompt(
         ana_blocks.append(f"=== {label} ANALYSIS ===\n{ana_text}")
     analyses_block = "\n\n".join(ana_blocks)
 
-    return VERIFY_TEMPLATE.format(
+    text = VERIFY_TEMPLATE.format(
         solutions_block=solutions_block,
         analyses_block=analyses_block,
     )
+    return text + _branch_hint_block(branch_names)

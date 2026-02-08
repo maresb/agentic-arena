@@ -97,14 +97,15 @@ class TestArchiveRound:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
-            round_dir = os.path.join(tmpdir, "round0")
-            assert os.path.isdir(round_dir)
-
-            files = os.listdir(round_dir)
-            solution_files = [f for f in files if "solution" in f]
+            files = os.listdir(tmpdir)
+            solution_files = [f for f in files if "solve" in f]
             analysis_files = [f for f in files if "analysis" in f]
             assert len(solution_files) == 3
             assert len(analysis_files) == 3
+            # Verify deterministic naming format
+            for f in solution_files:
+                assert f.startswith("00-01-solve-")
+                assert f.endswith(".md")
 
     def test_archives_critiques(self) -> None:
         state = init_state(task="test", repo="r")
@@ -114,10 +115,10 @@ class TestArchiveRound:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
-            round_dir = os.path.join(tmpdir, "round0")
-            files = os.listdir(round_dir)
+            files = os.listdir(tmpdir)
             critique_files = [f for f in files if "critique" in f]
             assert len(critique_files) == 1
+            assert critique_files[0].startswith("00-02-critique-")
 
     def test_archives_verdict_on_done(self) -> None:
         state = init_state(task="test", repo="r")
@@ -129,12 +130,12 @@ class TestArchiveRound:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
-            round_dir = os.path.join(tmpdir, "round0")
-            files = os.listdir(round_dir)
+            files = os.listdir(tmpdir)
             verdict_files = [f for f in files if "verify" in f]
             assert len(verdict_files) == 1
+            assert verdict_files[0].startswith("00-04-verify-")
 
-    def test_empty_state_creates_empty_round_dir(self) -> None:
+    def test_empty_state_produces_no_files(self) -> None:
         state = init_state(task="test", repo="r")
         state.solutions = {}
         state.analyses = {}
@@ -142,9 +143,20 @@ class TestArchiveRound:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
-            round_dir = os.path.join(tmpdir, "round0")
-            assert os.path.isdir(round_dir)
-            assert os.listdir(round_dir) == []
+            files = [f for f in os.listdir(tmpdir) if f.endswith(".md")]
+            assert files == []
+
+    def test_archive_deduplication(self) -> None:
+        """Archiving the same content twice should not create duplicate files."""
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "Sol A"}
+        state.analyses = {}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _archive_round(state, tmpdir)
+            _archive_round(state, tmpdir)
+            files = [f for f in os.listdir(tmpdir) if "solve" in f]
+            assert len(files) == 1
 
 
 class TestStepOnce:

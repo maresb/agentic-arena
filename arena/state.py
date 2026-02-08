@@ -8,6 +8,7 @@ without losing progress.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -111,28 +112,123 @@ class ArenaState(BaseModel):
     # can include them and failures can optionally veto consensus.
     verify_results: list[str] = Field(default_factory=list)
 
+    # Agent branch names: captured from the launch API response so that
+    # agents can inspect each other's committed work via git fetch.
+    branch_names: dict[str, str] = Field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers
 # ---------------------------------------------------------------------------
 
 
+_FILE_REF_PREFIX = "file:"
+
+# Fields whose dict values are externalized to separate .md files.
+_EXTERNALIZABLE_DICT_FIELDS = ("solutions", "analyses", "critiques")
+
+# Fields whose list values are externalized (verify_results).
+_EXTERNALIZABLE_LIST_FIELDS = ("verify_results",)
+
+
+def _resolve_file_ref(value: str, base_dir: str) -> str:
+    """If *value* is a ``file:`` reference, read and return the file content."""
+    if value.startswith(_FILE_REF_PREFIX):
+        rel = value[len(_FILE_REF_PREFIX) :]
+        file_path = os.path.join(base_dir, rel)
+        if os.path.exists(file_path):
+            with open(file_path) as f:
+                return f.read()
+        logger.warning("Externalized file %s not found; using empty string", file_path)
+        return ""
+    return value
+
+
+def _write_artifact(content: str, artifact_path: str) -> None:
+    """Write artifact content to disk."""
+    os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+    with open(artifact_path, "w") as f:
+        f.write(content)
+
+
 def load_state(path: str = "arena/state.json") -> ArenaState | None:
-    """Load arena state from disk. Returns ``None`` if the file does not exist."""
-    if os.path.exists(path):
-        with open(path) as f:
-            return ArenaState.model_validate_json(f.read())
-    return None
+    """Load arena state from disk. Returns ``None`` if the file does not exist.
+
+    Transparently resolves ``file:`` references back to inline text so
+    that phase functions always see plain strings.  Handles both the old
+    inline format and the new externalized format (migration shim).
+    """
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        raw = f.read()
+    state = ArenaState.model_validate_json(raw)
+
+    base_dir = os.path.dirname(path) or "."
+
+    # Resolve dict fields (solutions, analyses, critiques)
+    for field_name in _EXTERNALIZABLE_DICT_FIELDS:
+        d: dict[str, str] = getattr(state, field_name)
+        for key, value in d.items():
+            d[key] = _resolve_file_ref(value, base_dir)
+
+    # Resolve list fields (verify_results)
+    for field_name in _EXTERNALIZABLE_LIST_FIELDS:
+        lst: list[str] = getattr(state, field_name)
+        for i, value in enumerate(lst):
+            lst[i] = _resolve_file_ref(value, base_dir)
+
+    # Resolve final_verdict
+    if state.final_verdict:
+        state.final_verdict = _resolve_file_ref(state.final_verdict, base_dir)
+
+    return state
 
 
 def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
-    """Atomic write: write to temp file then rename to prevent corruption."""
+    """Atomic write: write to temp file then rename to prevent corruption.
+
+    Large text fields are externalized to separate ``.md`` files under an
+    ``artifacts/`` subdirectory.  The JSON stores ``file:`` references
+    instead of inline text.
+    """
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
+    artifacts_dir = os.path.join(parent, "artifacts")
+
+    # Build a shallow copy with file references replacing large text
+    dump = state.model_dump()
+
+    # Externalize dict fields
+    for field_name in _EXTERNALIZABLE_DICT_FIELDS:
+        d = dump.get(field_name, {})
+        for key, value in d.items():
+            if value:
+                rel = f"artifacts/{field_name}_{key}.md"
+                _write_artifact(value, os.path.join(parent, rel))
+                d[key] = f"{_FILE_REF_PREFIX}{rel}"
+
+    # Externalize list fields
+    for field_name in _EXTERNALIZABLE_LIST_FIELDS:
+        lst = dump.get(field_name, [])
+        for i, value in enumerate(lst):
+            if value:
+                rel = f"artifacts/{field_name}_{i}.md"
+                _write_artifact(value, os.path.join(parent, rel))
+                lst[i] = f"{_FILE_REF_PREFIX}{rel}"
+
+    # Externalize final_verdict
+    if dump.get("final_verdict"):
+        rel = "artifacts/final_verdict.md"
+        _write_artifact(dump["final_verdict"], os.path.join(parent, rel))
+        dump["final_verdict"] = f"{_FILE_REF_PREFIX}{rel}"
+
+    json_str = json.dumps(dump, indent=2)
+
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(state.model_dump_json(indent=2))
+            f.write(json_str)
         os.replace(tmp_path, path)
     except BaseException:
         try:

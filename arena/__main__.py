@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
-from arena.orchestrator import generate_final_report, run_orchestrator, step_once  # noqa: E402
+from arena.orchestrator import DEFAULT_ARENA_DIR, generate_final_report, run_orchestrator, step_once  # noqa: E402
 from arena.state import load_state, save_state, init_state  # noqa: E402
 
 app = typer.Typer(
@@ -76,7 +76,7 @@ def init(
     ] = None,
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
-    ] = "arena",
+    ] = DEFAULT_ARENA_DIR,
 ) -> None:
     """Initialize a new arena run."""
     parsed_commands = verify_commands.split(",") if verify_commands else None
@@ -104,7 +104,7 @@ def init(
 def run(
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
-    ] = "arena",
+    ] = DEFAULT_ARENA_DIR,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
     ] = False,
@@ -118,7 +118,7 @@ def run(
 def step(
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
-    ] = "arena",
+    ] = DEFAULT_ARENA_DIR,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
     ] = False,
@@ -153,7 +153,7 @@ def step(
 def status(
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
-    ] = "arena",
+    ] = DEFAULT_ARENA_DIR,
 ) -> None:
     """Show the current state of the arena."""
     state_path = os.path.join(arena_dir, "state.json")

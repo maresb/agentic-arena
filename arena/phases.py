@@ -107,6 +107,10 @@ def step_solve(
                 model=MODELS[model],
             )
             state.agent_ids[alias] = agent["id"]
+            # Capture branch name if returned by the API
+            branch = agent.get("branchName") or agent.get("branch_name")
+            if branch:
+                state.branch_names[alias] = branch
             _save()
 
     # Poll all pending agents until finished (truly parallel)
@@ -167,7 +171,7 @@ def step_evaluate(
         logger.info("Sending evaluate follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=evaluate_prompt(others),
+            prompt=evaluate_prompt(others, branch_names=state.branch_names or None),
         )
         fresh_aliases.add(alias)
 
@@ -224,7 +228,7 @@ def step_revise(
         logger.info("Sending revise follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=revise_prompt(all_critiques),
+            prompt=revise_prompt(all_critiques, branch_names=state.branch_names or None),
         )
 
     # Wait for all SENT agents using persisted message counts
@@ -300,7 +304,9 @@ def step_verify(
         logger.info("Sending verify follow-up to judge %s", judge)
         api.followup(
             agent_id=state.agent_ids[judge],
-            prompt=verify_prompt(solutions, analyses),
+            prompt=verify_prompt(
+                solutions, analyses, branch_names=state.branch_names or None
+            ),
         )
 
     # ── Step 3: Wait for response and extract verdict ──

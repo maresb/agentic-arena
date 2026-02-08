@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import sys
 import time
 from typing import Any
 
@@ -19,6 +20,17 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 5
 BASE_BACKOFF = 2.0  # seconds
 DEFAULT_TIMEOUT = 60  # seconds per HTTP request
+
+
+def _emit_poll_dot() -> None:
+    """Print a single '.' to stderr as a polling heartbeat.
+
+    Suppressed when the arena logger is at DEBUG level (--verbose mode)
+    since full debug lines already provide visibility.
+    """
+    if logger.getEffectiveLevel() > logging.DEBUG:
+        sys.stderr.write(".")
+        sys.stderr.flush()
 
 
 class CursorCloudAPI:
@@ -185,6 +197,7 @@ def wait_for_agent(
             return status
         if status not in ("CREATING", "RUNNING"):
             raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
+        _emit_poll_dot()
         time.sleep(poll_interval)
     raise TimeoutError(f"Agent {agent_id} did not finish within {timeout}s")
 
@@ -212,6 +225,7 @@ def wait_for_all_agents(
             elif status not in ("CREATING", "RUNNING"):
                 raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
         if remaining:
+            _emit_poll_dot()
             time.sleep(poll_interval)
     if remaining:
         raise TimeoutError(f"Agents {list(remaining)} did not finish within {timeout}s")
@@ -289,6 +303,7 @@ def wait_for_followup(
         else:
             raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
 
+        _emit_poll_dot()
         time.sleep(poll_interval)
 
     raise TimeoutError(f"Agent {agent_id}: no new response within {timeout}s")
@@ -348,6 +363,7 @@ def wait_for_all_followups(
                 )
 
         if remaining:
+            _emit_poll_dot()
             time.sleep(poll_interval)
 
     if remaining:

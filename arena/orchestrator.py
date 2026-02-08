@@ -12,13 +12,15 @@ transition.  :func:`run_orchestrator` is a convenience wrapper that loops
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
-import uuid
 
 from arena.api import CursorCloudAPI
 from arena.phases import step_evaluate, step_revise, step_solve, step_verify
 from arena.state import ArenaState, Phase, load_state, save_state
+
+DEFAULT_ARENA_DIR = "arenas/0001"
 
 logger = logging.getLogger("arena")
 
@@ -50,41 +52,66 @@ def _make_api() -> CursorCloudAPI:
     return CursorCloudAPI(api_key)
 
 
+_PHASE_NUMBER = {"solve": 1, "evaluate": 2, "revise": 3, "verify": 4}
+
+
+def _content_uid(content: str) -> str:
+    """Return a short deterministic UID from content (first 6 hex chars of SHA-256)."""
+    return hashlib.sha256(content.encode()).hexdigest()[:6]
+
+
+def _archive_artifact(
+    arena_dir: str, name: str, content: str
+) -> None:
+    """Write an artifact file, skipping if it already exists (deduplication)."""
+    path = os.path.join(arena_dir, name)
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+
+
 def _archive_round(state: ArenaState, arena_dir: str) -> None:
-    """Archive the current round's outputs to disk for human review."""
-    round_dir = os.path.join(arena_dir, f"round{state.round}")
-    os.makedirs(round_dir, exist_ok=True)
+    """Archive the current round's outputs using deterministic naming.
 
-    uid = uuid.uuid4().hex[:8]
+    Naming scheme: ``{round:02d}-{phase:02d}-{phase_name}-{letter}-{model}-{uid}.md``
+    where *uid* is derived from content (SHA-256 prefix) for deduplication.
+    Files already present on disk are not overwritten.
+    """
+    rnd = state.round
 
-    # Archive solutions and analyses
     for alias in state.alias_mapping:
         letter = alias.split("_")[1]  # "agent_a" → "a"
+        model = str(state.alias_mapping.get(alias, "unknown"))
 
         solution = state.solutions.get(alias)
         if solution:
-            path = os.path.join(round_dir, f"{letter}_solution_{uid}.md")
-            with open(path, "w") as f:
-                f.write(solution)
+            uid = _content_uid(solution)
+            name = f"{rnd:02d}-{_PHASE_NUMBER['solve']:02d}-solve-{letter}-{model}-{uid}.md"
+            _archive_artifact(arena_dir, name, solution)
 
         analysis = state.analyses.get(alias)
         if analysis:
-            path = os.path.join(round_dir, f"{letter}_analysis_{uid}.md")
-            with open(path, "w") as f:
-                f.write(analysis)
+            uid = _content_uid(analysis)
+            name = f"{rnd:02d}-{_PHASE_NUMBER['solve']:02d}-analysis-{letter}-{model}-{uid}.md"
+            _archive_artifact(arena_dir, name, analysis)
 
         critique = state.critiques.get(alias)
         if critique:
-            path = os.path.join(round_dir, f"{letter}_critique_{uid}.md")
-            with open(path, "w") as f:
-                f.write(critique)
+            phase_num = _PHASE_NUMBER["evaluate"]
+            uid = _content_uid(critique)
+            name = f"{rnd:02d}-{phase_num:02d}-critique-{letter}-{model}-{uid}.md"
+            _archive_artifact(arena_dir, name, critique)
 
     # Archive verdict if present
     if state.final_verdict and state.phase == Phase.DONE:
         judge_letter = state.judge_history[-1].split("_")[1]
-        path = os.path.join(round_dir, f"verify_{judge_letter}_{uid}.md")
-        with open(path, "w") as f:
-            f.write(state.final_verdict)
+        judge_model = str(state.alias_mapping.get(state.judge_history[-1], "unknown"))
+        uid = _content_uid(state.final_verdict)
+        phase_num = _PHASE_NUMBER["verify"]
+        name = f"{rnd:02d}-{phase_num:02d}-verify-{judge_letter}-{judge_model}-{uid}.md"
+        _archive_artifact(arena_dir, name, state.final_verdict)
 
 
 def generate_final_report(state: ArenaState, arena_dir: str) -> None:
@@ -152,7 +179,7 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     logger.info("Final report written to %s", report_path)
 
 
-def step_once(arena_dir: str = "arena") -> ArenaState:
+def step_once(arena_dir: str = DEFAULT_ARENA_DIR) -> ArenaState:
     """Execute exactly one phase transition and return the updated state.
 
     This is the core FSM primitive.  It loads the state, dispatches the
@@ -191,7 +218,7 @@ def step_once(arena_dir: str = "arena") -> ArenaState:
     return state
 
 
-def run_orchestrator(arena_dir: str = "arena") -> None:
+def run_orchestrator(arena_dir: str = DEFAULT_ARENA_DIR) -> None:
     """Loop :func:`step_once` until the arena is complete, then report."""
     while True:
         state = step_once(arena_dir)
