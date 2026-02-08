@@ -129,13 +129,23 @@ class CursorCloudAPI:
         ).json().get("repositories", [])
 
 
+def _is_assistant_message(msg: dict) -> bool:
+    """Check if a message is from the assistant (supports both API formats)."""
+    return msg.get("type") == "assistant_message" or msg.get("role") == "assistant"
+
+
 def wait_for_agent(
     api: CursorCloudAPI,
     agent_id: str,
     timeout: int = 600,
     poll_interval: int = 10,
 ) -> str:
-    """Poll a single agent until FINISHED."""
+    """Poll a single agent until FINISHED.
+
+    Use this for initial agent launches where the status starts at
+    CREATING and progresses to FINISHED.  For follow-ups, use
+    :func:`wait_for_followup` instead.
+    """
     start = time.time()
     while time.time() - start < timeout:
         info = api.status(agent_id)
@@ -154,7 +164,11 @@ def wait_for_all_agents(
     timeout: int = 600,
     poll_interval: int = 10,
 ) -> None:
-    """Poll multiple agents concurrently until all are FINISHED."""
+    """Poll multiple agents concurrently until all are FINISHED.
+
+    Use this for initial agent launches.  For follow-ups, use
+    :func:`wait_for_all_followups` instead.
+    """
     start = time.time()
     remaining = dict(agents)
     while remaining and time.time() - start < timeout:
@@ -173,4 +187,152 @@ def wait_for_all_agents(
     if remaining:
         raise TimeoutError(
             f"Agents {list(remaining)} did not finish within {timeout}s"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Follow-up waiting helpers
+#
+# After sending a follow-up to a FINISHED agent, there is a race: the
+# status may still read FINISHED before the agent transitions to RUNNING.
+# Polling status alone would return immediately with stale results.
+#
+# These helpers solve the race by checking for *new messages* in the
+# conversation (the reliable signal), with status as a secondary check
+# for error detection and a grace period for the edge case where the
+# follow-up is processed before the first poll.
+# ---------------------------------------------------------------------------
+
+
+def wait_for_followup(
+    api: CursorCloudAPI,
+    agent_id: str,
+    previous_msg_count: int,
+    timeout: int = 600,
+    poll_interval: int = 10,
+    grace_period: int = 30,
+) -> str:
+    """Wait for a new assistant response after sending a follow-up.
+
+    Parameters
+    ----------
+    previous_msg_count:
+        Number of messages in the conversation *before* the follow-up was
+        sent.  Obtained via ``len(api.get_conversation(agent_id))``.
+    grace_period:
+        Seconds to tolerate the agent remaining FINISHED with no new
+        messages.  Covers the window between the POST returning and the
+        agent status transitioning to RUNNING.
+    """
+    start = time.time()
+    grace_deadline: float | None = None
+
+    while time.time() - start < timeout:
+        # Primary signal: new assistant message
+        messages = api.get_conversation(agent_id)
+        if len(messages) > previous_msg_count and _is_assistant_message(
+            messages[-1]
+        ):
+            return "FINISHED"
+
+        # Secondary signal: agent status (for error detection + grace)
+        info = api.status(agent_id)
+        status = info["status"]
+
+        if status in ("RUNNING", "CREATING"):
+            grace_deadline = None  # Agent is working — reset grace
+        elif status == "FINISHED":
+            if grace_deadline is None:
+                grace_deadline = time.time() + grace_period
+                logger.debug(
+                    "Agent %s FINISHED with no new messages, "
+                    "starting %ds grace period",
+                    agent_id,
+                    grace_period,
+                )
+            elif time.time() >= grace_deadline:
+                # Final check before giving up
+                messages = api.get_conversation(agent_id)
+                if len(messages) > previous_msg_count and _is_assistant_message(
+                    messages[-1]
+                ):
+                    return "FINISHED"
+                raise RuntimeError(
+                    f"Agent {agent_id} remained FINISHED for {grace_period}s "
+                    f"with no new messages (had {previous_msg_count}, "
+                    f"got {len(messages)})"
+                )
+        else:
+            raise RuntimeError(
+                f"Agent {agent_id} in unexpected state: {status}"
+            )
+
+        time.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"Agent {agent_id}: no new response within {timeout}s"
+    )
+
+
+def wait_for_all_followups(
+    api: CursorCloudAPI,
+    agents: dict[str, tuple[str, int]],
+    timeout: int = 600,
+    poll_interval: int = 10,
+    grace_period: int = 30,
+) -> None:
+    """Wait for new assistant responses from multiple agents after follow-ups.
+
+    Parameters
+    ----------
+    agents:
+        Mapping of ``alias -> (agent_id, previous_msg_count)``.
+    """
+    start = time.time()
+    remaining = dict(agents)
+    grace_deadlines: dict[str, float] = {}
+
+    while remaining and time.time() - start < timeout:
+        for alias, (agent_id, prev_count) in list(remaining.items()):
+            messages = api.get_conversation(agent_id)
+            if len(messages) > prev_count and _is_assistant_message(
+                messages[-1]
+            ):
+                remaining.pop(alias)
+                grace_deadlines.pop(alias, None)
+                logger.info("Agent %s (%s) responded", alias, agent_id)
+                continue
+
+            info = api.status(agent_id)
+            status = info["status"]
+
+            if status in ("RUNNING", "CREATING"):
+                grace_deadlines.pop(alias, None)
+            elif status == "FINISHED":
+                if alias not in grace_deadlines:
+                    grace_deadlines[alias] = time.time() + grace_period
+                elif time.time() >= grace_deadlines[alias]:
+                    messages = api.get_conversation(agent_id)
+                    if len(messages) > prev_count and _is_assistant_message(
+                        messages[-1]
+                    ):
+                        remaining.pop(alias)
+                        grace_deadlines.pop(alias, None)
+                        continue
+                    raise RuntimeError(
+                        f"Agent {alias} ({agent_id}) remained FINISHED for "
+                        f"{grace_period}s with no new messages "
+                        f"(had {prev_count}, got {len(messages)})"
+                    )
+            else:
+                raise RuntimeError(
+                    f"Agent {alias} ({agent_id}) in unexpected state: {status}"
+                )
+
+        if remaining:
+            time.sleep(poll_interval)
+
+    if remaining:
+        raise TimeoutError(
+            f"Agents {list(remaining)} did not respond within {timeout}s"
         )

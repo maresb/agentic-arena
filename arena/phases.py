@@ -10,7 +10,13 @@ from __future__ import annotations
 import logging
 import random
 
-from arena.api import CursorCloudAPI, wait_for_agent, wait_for_all_agents
+from arena.api import (
+    CursorCloudAPI,
+    wait_for_agent,
+    wait_for_all_agents,
+    wait_for_all_followups,
+    wait_for_followup,
+)
 from arena.extraction import (
     VerdictDecision,
     extract_latest_response,
@@ -86,7 +92,8 @@ def step_solve(state: ArenaState, api: CursorCloudAPI) -> None:
 
 def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
     """Each agent critiques the other two solutions without revising its own."""
-    # Send all follow-ups first (parallel launch)
+    # Send all follow-ups, recording message counts for fresh sends
+    fresh_msg_counts: dict[str, int] = {}
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -97,6 +104,9 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
         others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
+        fresh_msg_counts[alias] = len(
+            api.get_conversation(state.agent_ids[alias])
+        )
         logger.info("Sending evaluate follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -105,14 +115,23 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
         state.phase_progress[alias] = ProgressStatus.SENT
         save_state(state)
 
-    # Poll all agents until finished (truly parallel)
-    pending = {
+    # Wait for freshly sent follow-ups (message-count based)
+    fresh_pending = {
+        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
+        for alias in fresh_msg_counts
+    }
+    if fresh_pending:
+        wait_for_all_followups(api, fresh_pending)
+
+    # Wait for resumed follow-ups from a previous run (status based)
+    resumed_pending = {
         alias: state.agent_ids[alias]
         for alias in state.alias_mapping
-        if state.phase_progress.get(alias) != ProgressStatus.DONE
+        if state.phase_progress.get(alias) == ProgressStatus.SENT
+        and alias not in fresh_msg_counts
     }
-    if pending:
-        wait_for_all_agents(api, pending)
+    if resumed_pending:
+        wait_for_all_agents(api, resumed_pending)
 
     # Extract critiques
     for alias in state.alias_mapping:
@@ -137,7 +156,8 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI) -> None:
 
 def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
     """Each agent revises its solution based on all three critiques."""
-    # Send all follow-ups first
+    # Send all follow-ups, recording message counts for fresh sends
+    fresh_msg_counts: dict[str, int] = {}
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -148,6 +168,9 @@ def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
         all_critiques = list(state.critiques.items())
         random.shuffle(all_critiques)
 
+        fresh_msg_counts[alias] = len(
+            api.get_conversation(state.agent_ids[alias])
+        )
         logger.info("Sending revise follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -156,14 +179,23 @@ def step_revise(state: ArenaState, api: CursorCloudAPI) -> None:
         state.phase_progress[alias] = ProgressStatus.SENT
         save_state(state)
 
-    # Poll all agents until finished
-    pending = {
+    # Wait for freshly sent follow-ups (message-count based)
+    fresh_pending = {
+        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
+        for alias in fresh_msg_counts
+    }
+    if fresh_pending:
+        wait_for_all_followups(api, fresh_pending)
+
+    # Wait for resumed follow-ups from a previous run (status based)
+    resumed_pending = {
         alias: state.agent_ids[alias]
         for alias in state.alias_mapping
-        if state.phase_progress.get(alias) != ProgressStatus.DONE
+        if state.phase_progress.get(alias) == ProgressStatus.SENT
+        and alias not in fresh_msg_counts
     }
-    if pending:
-        wait_for_all_agents(api, pending)
+    if resumed_pending:
+        wait_for_all_agents(api, resumed_pending)
 
     # Extract revised solutions
     for alias in state.alias_mapping:
@@ -204,12 +236,13 @@ def step_verify(state: ArenaState, api: CursorCloudAPI) -> None:
     solutions = list(state.solutions.items())
     analyses = list(state.analyses.items())
 
+    prev_count = len(api.get_conversation(state.agent_ids[judge]))
     logger.info("Sending verify follow-up to judge %s", judge)
     api.followup(
         agent_id=state.agent_ids[judge],
         prompt=verify_prompt(solutions, analyses),
     )
-    wait_for_agent(api, state.agent_ids[judge])
+    wait_for_followup(api, state.agent_ids[judge], prev_count)
 
     conversation = api.get_conversation(state.agent_ids[judge])
     verdict_text = extract_latest_response(conversation)
@@ -225,12 +258,13 @@ def step_verify(state: ArenaState, api: CursorCloudAPI) -> None:
         and verdict.decision == VerdictDecision.CONSENSUS
     ):
         for cmd in state.config.verify_commands:
+            prev_count = len(api.get_conversation(state.agent_ids[judge]))
             logger.info("Running verify command via judge: %s", cmd)
             api.followup(
                 agent_id=state.agent_ids[judge],
                 prompt=f"Run this command and report the result: {cmd}",
             )
-            wait_for_agent(api, state.agent_ids[judge])
+            wait_for_followup(api, state.agent_ids[judge], prev_count)
 
     # Determine next phase
     if verdict.decision == VerdictDecision.CONSENSUS:

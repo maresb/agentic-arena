@@ -14,10 +14,14 @@ def make_mock_api(
     conversation_response: list[dict] | None = None,
     launch_id: str = "agent-123",
 ) -> MagicMock:
-    """Create a mock CursorCloudAPI with sensible defaults."""
+    """Create a mock CursorCloudAPI with sensible defaults.
+
+    The mock simulates conversation growth: each follow-up appends a
+    user + assistant message pair so that ``wait_for_followup`` sees
+    ``len(messages) > previous_msg_count`` and completes.
+    """
     api = MagicMock()
     api.launch.return_value = {"id": launch_id}
-    api.followup.return_value = {"id": launch_id}
     api.status.return_value = {"status": "FINISHED"}
 
     if conversation_response is None:
@@ -32,7 +36,24 @@ def make_mock_api(
                 ),
             }
         ]
-    api.get_conversation.return_value = conversation_response
+
+    # Track follow-ups per agent to simulate conversation growth
+    followup_counts: dict[str, int] = {}
+
+    def mock_followup(agent_id: str, prompt: str) -> dict:
+        followup_counts[agent_id] = followup_counts.get(agent_id, 0) + 1
+        return {"id": agent_id}
+
+    def mock_get_conversation(agent_id: str) -> list[dict]:
+        n = followup_counts.get(agent_id, 0)
+        base = list(conversation_response)
+        for _ in range(n):
+            base.append({"role": "user", "content": "follow-up"})
+            base.append(dict(conversation_response[-1]))
+        return base
+
+    api.followup.side_effect = mock_followup
+    api.get_conversation.side_effect = mock_get_conversation
     return api
 
 
