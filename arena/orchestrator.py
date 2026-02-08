@@ -18,7 +18,13 @@ import os
 
 from arena.api import CursorCloudAPI
 from arena.phases import step_evaluate, step_revise, step_solve, step_verify
-from arena.state import ArenaState, Phase, load_state, save_state
+from arena.state import (
+    ArenaState,
+    Phase,
+    load_state,
+    sanitize_filename_component,
+    save_state,
+)
 
 DEFAULT_ARENA_DIR = "arenas/0001"
 
@@ -80,8 +86,10 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
     rnd = state.round
 
     for alias in state.alias_mapping:
-        letter = alias.split("_")[1]  # "agent_a" → "a"
-        model = str(state.alias_mapping.get(alias, "unknown"))
+        letter = sanitize_filename_component(alias.split("_")[1])  # "agent_a" → "a"
+        model = sanitize_filename_component(
+            str(state.alias_mapping.get(alias, "unknown"))
+        )
 
         solution = state.solutions.get(alias)
         if solution:
@@ -104,8 +112,12 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
 
     # Archive verdict if present
     if state.final_verdict and state.phase == Phase.DONE:
-        judge_letter = state.judge_history[-1].split("_")[1]
-        judge_model = str(state.alias_mapping.get(state.judge_history[-1], "unknown"))
+        judge_letter = sanitize_filename_component(
+            state.judge_history[-1].split("_")[1]
+        )
+        judge_model = sanitize_filename_component(
+            str(state.alias_mapping.get(state.judge_history[-1], "unknown"))
+        )
         uid = _content_uid(state.final_verdict)
         phase_num = _PHASE_NUMBER["verify"]
         name = f"{rnd:02d}-{phase_num:02d}-verify-{judge_letter}-{judge_model}-{uid}.md"
