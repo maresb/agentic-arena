@@ -1,0 +1,21 @@
+[workspace]
+authors = ["Cursor Agent <cursoragent@cursor.com>"]
+channels = ["conda-forge"]
+name = "workspace"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+test = "pytest tests/ -v"
+lint = "ruff check arena/ tests/"
+format = "ruff format arena/ tests/"
+typecheck = "mypy arena/ --ignore-missing-imports"
+arena = "python -m arena"
+
+[dependencies]
+python = "3.13.*"
+requests = ">=2.32.5,<3"
+pytest = ">=9.0.2,<10"
+mypy = ">=1.19.1,<2"
+ruff = ">=0.15.0,<0.16"
+types-requests = ">=2.32.4.20260107,<3"

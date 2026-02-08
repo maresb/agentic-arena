@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Pixi
+.pixi/
+
+# Arena state (local runs)
+arena/state.json
+arena/round*/
+arena/report.md
+arena/orchestrator.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+.mypy_cache/
