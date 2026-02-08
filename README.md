@@ -326,7 +326,7 @@ and PR to `main`:
 
 - `pixi run test` — unit tests
 - `pixi run lint` — ruff linter
-- `pixi run format -- --check` — ruff format check
+- `pixi run format-check` — ruff format check
 - `pixi run typecheck` — mypy
 
 ---
