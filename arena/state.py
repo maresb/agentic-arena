@@ -69,7 +69,7 @@ class ArenaConfig(BaseModel, frozen=True):
     base_branch: str = "main"
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
-    models: list[str] = Field(default_factory=lambda: list(ModelName))
+    models: list[str] = Field(default_factory=lambda: [str(m) for m in ModelName])
     branch_only: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
     context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
