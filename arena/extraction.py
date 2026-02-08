@@ -88,13 +88,6 @@ def extract_solution_and_analysis(
     return solution, analysis
 
 
-def extract_solution_and_analysis_from_latest(
-    conversation: list[dict],
-) -> tuple[str, str]:
-    """Same as above but for revised responses (later in conversation)."""
-    return extract_solution_and_analysis(conversation)
-
-
 def extract_latest_response(conversation: list[dict]) -> str:
     """Extract the most recent assistant message."""
     return _get_latest_assistant_message(conversation)
