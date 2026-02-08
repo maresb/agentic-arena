@@ -23,7 +23,7 @@ jobs:
         run: pixi run lint
 
       - name: Run formatter check
-        run: pixi run format -- --check
+        run: pixi run format-check
 
       - name: Run type checker
         run: pixi run typecheck

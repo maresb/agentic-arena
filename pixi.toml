@@ -9,6 +9,7 @@ version = "0.1.0"
 test = "pytest tests/ -v"
 lint = "ruff check arena/ tests/"
 format = "ruff format arena/ tests/"
+format-check = "ruff format arena/ tests/ --check"
 typecheck = "mypy arena/ --ignore-missing-imports"
 arena = "python -m arena"
 
