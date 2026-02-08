@@ -290,7 +290,7 @@ execution-plan.md          Implementation roadmap
 | `ArenaState` | `state.py` | Full mutable state persisted to `state.json` |
 | `Phase` | `state.py` | StrEnum: solve, evaluate, revise, verify, done |
 | `ProgressStatus` | `state.py` | StrEnum: pending, sent, done |
-| `ModelName` | `state.py` | StrEnum: opus, gpt, gemini |
+| `DEFAULT_MODELS` | `state.py` | Default model short names: opus, gpt, gemini |
 | `Verdict` | `extraction.py` | Parsed judge verdict with decision, score, etc. |
 | `CursorCloudAPI` | `api.py` | HTTP client for the Cursor Cloud Agents endpoints |
 

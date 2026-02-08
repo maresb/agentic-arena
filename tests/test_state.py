@@ -7,7 +7,7 @@ import tempfile
 from arena.state import (
     ALIASES,
     ArenaConfig,
-    ModelName,
+    DEFAULT_MODELS,
     Phase,
     ProgressStatus,
     _aliases_for_count,
@@ -49,7 +49,7 @@ class TestInitState:
         """The mapping is randomized, so all models appear but order varies."""
         state = init_state(task="test", repo="r")
         models = set(state.alias_mapping.values())
-        assert models == {ModelName.OPUS, ModelName.GPT, ModelName.GEMINI}
+        assert models == set(DEFAULT_MODELS)
         assert set(state.alias_mapping.keys()) == set(ALIASES)
 
     def test_custom_options(self) -> None:

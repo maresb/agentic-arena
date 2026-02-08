@@ -47,12 +47,9 @@ class ProgressStatus(StrEnum):
     DONE = "done"
 
 
-class ModelName(StrEnum):
-    """Supported model identifiers."""
-
-    OPUS = "opus"
-    GPT = "gpt"
-    GEMINI = "gemini"
+# Known model short names. Any string is accepted by --models; these are the
+# defaults and the keys used in the MODELS mapping in prompts.py.
+DEFAULT_MODELS: tuple[str, ...] = ("opus", "gpt", "gemini")
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +68,7 @@ class ArenaConfig(BaseModel, frozen=True):
     base_branch: str = "main"
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
-    models: list[str] = Field(default_factory=lambda: [str(m) for m in ModelName])
+    models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
     branch_only: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
     context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
@@ -317,10 +314,10 @@ def init_state(
     ----------
     models:
         Optional list of model short names (e.g. ``["opus", "gpt"]``).
-        Defaults to all :class:`ModelName` values.  Dynamically sizes
-        the alias list to match.
+        Defaults to :data:`DEFAULT_MODELS`.  Dynamically sizes the alias
+        list to match.
     """
-    model_list = list(models) if models else list(ModelName)
+    model_list = list(models) if models else list(DEFAULT_MODELS)
     random.shuffle(model_list)
     aliases = _aliases_for_count(len(model_list))
 
