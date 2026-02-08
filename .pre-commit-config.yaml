@@ -2,7 +2,7 @@
 # Ruff and ty run through pixi so versions are managed in pixi.toml.
 
 ci:
-    skip: [ruff-check, ruff-format, ty]
+    skip: [ruff-check, ruff-format, ty, mypy]
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -31,6 +31,12 @@ repos:
   - id: ty
     name: ty (type checker by Astral)
     entry: pixi run ty check
+    language: system
+    pass_filenames: false
+    types: [python]
+  - id: mypy
+    name: mypy (type checker)
+    entry: pixi run mypy --ignore-missing-imports
     language: system
     pass_filenames: false
     types: [python]
