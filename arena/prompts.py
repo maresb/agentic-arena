@@ -10,9 +10,9 @@ import random
 # Model identifier mapping (alias → Cursor API model name)
 # ---------------------------------------------------------------------------
 MODELS: dict[str, str] = {
-    "opus": "claude-4.6-opus",
-    "gpt": "gpt-5.2",
-    "gemini": "gemini-3-pro",
+    "opus": "claude-4.6-opus-high-thinking",
+    "gpt": "gpt-5.2-codex-high",
+    "gemini": "gemini-3-pro",  # temporarily unavailable
 }
 
 # ---------------------------------------------------------------------------
