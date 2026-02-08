@@ -2,6 +2,7 @@
 
 from arena.prompts import (
     MODELS,
+    _branch_hint_block,
     evaluate_prompt,
     revise_prompt,
     solve_prompt,
@@ -94,6 +95,37 @@ class TestVerifyPrompt:
         prompt = verify_prompt([("agent_a", "x")], [("agent_a", "y")])
         assert "you do not know which alias is yours" in prompt
         assert "technical merit" in prompt
+
+
+class TestBranchHints:
+    def test_empty_branch_names_returns_empty(self) -> None:
+        assert _branch_hint_block(None) == ""
+        assert _branch_hint_block({}) == ""
+
+    def test_branch_names_included(self) -> None:
+        result = _branch_hint_block({"agent_a": "br-a", "agent_b": "br-b"})
+        assert "br-a" in result
+        assert "br-b" in result
+        assert "AGENT A" in result
+        assert "git fetch" in result
+
+    def test_evaluate_with_branch_names(self) -> None:
+        branches = {"agent_a": "branch-a", "agent_b": "branch-b"}
+        prompt = evaluate_prompt(
+            [("agent_a", "sol"), ("agent_b", "sol2")],
+            branch_names=branches,
+        )
+        assert "branch-a" in prompt
+        assert "branch-b" in prompt
+
+    def test_verify_with_branch_names(self) -> None:
+        branches = {"agent_a": "branch-a"}
+        prompt = verify_prompt(
+            [("agent_a", "sol")],
+            [("agent_a", "ana")],
+            branch_names=branches,
+        )
+        assert "branch-a" in prompt
 
 
 class TestModelsMapping:

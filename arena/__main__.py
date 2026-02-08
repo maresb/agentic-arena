@@ -19,7 +19,12 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
-from arena.orchestrator import DEFAULT_ARENA_DIR, generate_final_report, run_orchestrator, step_once  # noqa: E402
+from arena.orchestrator import (
+    DEFAULT_ARENA_DIR,
+    generate_final_report,
+    run_orchestrator,
+    step_once,
+)  # noqa: E402
 from arena.state import load_state, save_state, init_state  # noqa: E402
 
 app = typer.Typer(
@@ -76,7 +81,9 @@ def init(
     ] = None,
     models: Annotated[
         str | None,
-        typer.Option(help="Comma-separated model list (e.g. opus,gpt). Defaults to all."),
+        typer.Option(
+            help="Comma-separated model list (e.g. opus,gpt). Defaults to all."
+        ),
     ] = None,
     branch_only: Annotated[
         bool,

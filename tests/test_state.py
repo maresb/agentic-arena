@@ -10,6 +10,7 @@ from arena.state import (
     ModelName,
     Phase,
     ProgressStatus,
+    _aliases_for_count,
     init_state,
     load_state,
     save_state,
@@ -150,3 +151,99 @@ class TestSaveAndLoad:
             save_state(state, path)
             loaded = load_state(path)
             assert loaded == state
+
+    def test_externalized_artifacts_on_disk(self) -> None:
+        """save_state creates .md files in artifacts/ directory."""
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "Solution text A"}
+        state.analyses = {"agent_a": "Analysis text A"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.json")
+            save_state(state, path)
+            artifacts = os.path.join(tmpdir, "artifacts")
+            assert os.path.isdir(artifacts)
+            files = os.listdir(artifacts)
+            assert any("solutions" in f for f in files)
+            assert any("analyses" in f for f in files)
+
+    def test_externalized_round_trip_preserves_content(self) -> None:
+        """Externalized artifacts are read back identically on load."""
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "Long solution content here"}
+        state.final_verdict = "The final verdict text"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.json")
+            save_state(state, path)
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.solutions["agent_a"] == "Long solution content here"
+            assert loaded.final_verdict == "The final verdict text"
+
+    def test_backward_compat_inline_state(self) -> None:
+        """States saved with inline text (old format) still load correctly."""
+        state = init_state(task="test", repo="r")
+        # Simulate old-format JSON with inline text (no file: prefix)
+        dump = state.model_dump()
+        dump["solutions"] = {"agent_a": "inline solution"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.json")
+            with open(path, "w") as f:
+                json.dump(dump, f)
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.solutions["agent_a"] == "inline solution"
+
+
+class TestCustomModels:
+    def test_init_with_custom_models(self) -> None:
+        state = init_state(task="test", repo="r", models=["opus", "gpt"])
+        assert len(state.alias_mapping) == 2
+        assert set(state.alias_mapping.keys()) == {"agent_a", "agent_b"}
+
+    def test_init_with_single_model(self) -> None:
+        state = init_state(task="test", repo="r", models=["opus"])
+        assert len(state.alias_mapping) == 1
+        assert "agent_a" in state.alias_mapping
+
+    def test_aliases_for_count(self) -> None:
+        assert _aliases_for_count(1) == ["agent_a"]
+        assert _aliases_for_count(3) == ["agent_a", "agent_b", "agent_c"]
+        assert _aliases_for_count(5) == [
+            "agent_a",
+            "agent_b",
+            "agent_c",
+            "agent_d",
+            "agent_e",
+        ]
+
+    def test_models_stored_in_config(self) -> None:
+        state = init_state(task="test", repo="r", models=["opus", "gpt"])
+        assert len(state.config.models) == 2
+
+    def test_branch_only_config(self) -> None:
+        state = init_state(task="test", repo="r", branch_only=True)
+        assert state.config.branch_only is True
+
+    def test_verify_mode_config(self) -> None:
+        state = init_state(task="test", repo="r", verify_mode="gating")
+        assert state.config.verify_mode == "gating"
+
+    def test_branch_names_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.branch_names == {}
+        state.branch_names["agent_a"] = "feature/test"
+        assert state.branch_names["agent_a"] == "feature/test"
+
+    def test_token_usage_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.token_usage == {}
+        state.token_usage["agent_a"] = 5000
+        assert state.token_usage["agent_a"] == 5000
+
+    def test_verify_progress_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.verify_progress == ProgressStatus.PENDING
+
+    def test_context_mode_default(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.config.context_mode == "full"

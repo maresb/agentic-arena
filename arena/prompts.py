@@ -32,6 +32,7 @@ def _branch_hint_block(branch_names: dict[str, str] | None) -> str:
     lines.append("")
     return "\n".join(lines)
 
+
 # ---------------------------------------------------------------------------
 # Model identifier mapping (alias → Cursor API model name)
 # ---------------------------------------------------------------------------

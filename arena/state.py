@@ -204,7 +204,6 @@ def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
     """
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
-    artifacts_dir = os.path.join(parent, "artifacts")
 
     # Build a shallow copy with file references replacing large text
     dump = state.model_dump()

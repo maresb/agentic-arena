@@ -37,7 +37,9 @@ from arena.state import ArenaState, Phase, ProgressStatus, save_state
 logger = logging.getLogger("arena")
 
 
-def _update_token_usage(state: ArenaState, alias: str, conversation: list[dict]) -> None:
+def _update_token_usage(
+    state: ArenaState, alias: str, conversation: list[dict]
+) -> None:
     """Update cumulative token usage for *alias* from conversation metadata."""
     total = 0
     for msg in conversation:
@@ -261,7 +263,9 @@ def step_revise(
 
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=revise_prompt(all_critiques, branch_names=state.branch_names or None),
+            prompt=revise_prompt(
+                all_critiques, branch_names=state.branch_names or None
+            ),
         )
 
     # Wait for all SENT agents using persisted message counts
@@ -340,7 +344,9 @@ def step_verify(
         current_count = len(api.get_conversation(state.agent_ids[judge]))
         saved_count = state.verify_prev_msg_count or 0
         if current_count <= saved_count:
-            logger.info("Re-sending verify follow-up to judge %s (crash recovery)", judge)
+            logger.info(
+                "Re-sending verify follow-up to judge %s (crash recovery)", judge
+            )
             need_send = True
 
     if need_send:

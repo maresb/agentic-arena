@@ -60,9 +60,7 @@ def _content_uid(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:6]
 
 
-def _archive_artifact(
-    arena_dir: str, name: str, content: str
-) -> None:
+def _archive_artifact(arena_dir: str, name: str, content: str) -> None:
     """Write an artifact file, skipping if it already exists (deduplication)."""
     path = os.path.join(arena_dir, name)
     if os.path.exists(path):
@@ -193,7 +191,9 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
                 repo_url = f"https://github.com/{repo}"
             else:
                 repo_url = repo
-            pr_url = f"{repo_url}/compare/{state.config.base_branch}...{branch}?expand=1"
+            pr_url = (
+                f"{repo_url}/compare/{state.config.base_branch}...{branch}?expand=1"
+            )
             report_lines.append("---")
             report_lines.append("")
             report_lines.append("## Merge Winner")

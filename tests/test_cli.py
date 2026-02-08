@@ -106,6 +106,70 @@ class TestInitCommand:
             assert "Alias mapping" in result.output
 
 
+class TestInitModelsFlag:
+    def test_custom_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--models",
+                    "opus,gpt",
+                    "--arena-dir",
+                    tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(tmpdir, "state.json"))
+            assert state is not None
+            assert len(state.alias_mapping) == 2
+
+    def test_branch_only_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--branch-only",
+                    "--arena-dir",
+                    tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(tmpdir, "state.json"))
+            assert state is not None
+            assert state.config.branch_only is True
+
+    def test_verify_mode_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--verify-mode",
+                    "gating",
+                    "--arena-dir",
+                    tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(tmpdir, "state.json"))
+            assert state is not None
+            assert state.config.verify_mode == "gating"
+
+
 class TestStepCommand:
     def test_missing_state_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
