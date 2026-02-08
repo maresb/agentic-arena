@@ -9,6 +9,8 @@ from typing import Any
 
 import requests
 
+# TODO: if more shared utilities emerge beyond is_assistant_message,
+# extract them into arena/utils.py to avoid coupling api -> extraction.
 from arena.extraction import is_assistant_message
 
 logger = logging.getLogger("arena")

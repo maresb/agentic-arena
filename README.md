@@ -302,9 +302,9 @@ proposal.md          Full design document
       fresh-agent-per-round strategies for large tasks (proposal Section 8).
 - [ ] **Token usage monitoring.** Log approximate token counts per follow-up
       and warn when approaching context limits.
-- [ ] **Re-prompt on extraction failure.** When XML tags are missing, send
-      `RETRY_PROMPT` as a follow-up and re-extract (the template exists in
-      `extraction.py` but is not wired into the phase logic).
+- [x] **Re-prompt on extraction failure.** When XML tags are missing, send
+      `RETRY_PROMPT` as a follow-up and re-extract. Implemented via
+      `_extract_with_retry()` in solve and revise phases.
 - [ ] **Webhook support.** Replace polling with webhooks for agent status
       updates if the API supports them.
 
@@ -314,3 +314,6 @@ proposal.md          Full design document
       repo.
 - [ ] Cost tracking and per-run spend estimation.
 - [ ] CI pipeline (GitHub Actions) for lint, typecheck, and unit tests.
+- [ ] **Stable per-round archive IDs.** Store a UUID once per round in
+      `archive_id_by_round` to prevent duplicate archive files on restart.
+      Currently each `_archive_round` call generates a fresh UUID.

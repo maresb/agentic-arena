@@ -95,6 +95,10 @@ class ArenaState(BaseModel):
     # Used for message-count-based waiting on resume after a crash,
     # preventing stale-message extraction when an agent is already
     # FINISHED from a previous task.
+    #
+    # TODO: if per-agent metadata grows beyond sent_msg_counts (e.g.,
+    # tracking sent phase, retry counts), refactor into a FollowupMeta
+    # nested Pydantic model keyed by alias.
     sent_msg_counts: dict[str, int] = Field(default_factory=dict)
 
     # Verify-phase idempotency: persisted so a crash between sending the
