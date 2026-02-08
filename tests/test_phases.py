@@ -6,7 +6,13 @@ without making real API calls.
 
 from unittest.mock import MagicMock
 
-from arena.phases import step_evaluate, step_revise, step_solve, step_verify
+from arena.phases import (
+    _extract_with_retry,
+    step_evaluate,
+    step_revise,
+    step_solve,
+    step_verify,
+)
 from arena.state import ArenaState, Phase, ProgressStatus, init_state
 
 
@@ -295,3 +301,57 @@ class TestStepVerify:
         assert len(state.judge_history) == 1
         judge = state.judge_history[0]
         assert judge in state.alias_mapping
+
+
+class TestExtractWithRetry:
+    def test_no_retry_when_tags_present(self) -> None:
+        """If XML tags are present, no follow-up is sent."""
+        api = make_mock_api()
+        conversation = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<solution>\n## PLAN\nStep 1\n</solution>\n"
+                    "<analysis>\n## RISKS\nNone\n</analysis>"
+                ),
+            }
+        ]
+        solution, analysis = _extract_with_retry(api, "agent-1", conversation)
+        assert "## PLAN" in solution
+        assert "## RISKS" in analysis
+        # No follow-up should have been sent
+        api.followup.assert_not_called()
+
+    def test_retry_when_tags_missing(self) -> None:
+        """If XML tags are missing, sends RETRY_PROMPT and tries again."""
+        api = MagicMock()
+        api.status.return_value = {"status": "FINISHED"}
+
+        # First call returns no tags; second returns properly tagged
+        call_count = {"n": 0}
+
+        def mock_get_conversation(agent_id: str) -> list[dict]:
+            call_count["n"] += 1
+            if call_count["n"] <= 1:
+                return [{"role": "assistant", "content": "plain text, no tags"}]
+            return [
+                {"role": "assistant", "content": "plain text, no tags"},
+                {"role": "user", "content": "retry prompt"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "<solution>\nRetried plan\n</solution>\n"
+                        "<analysis>\nRetried analysis\n</analysis>"
+                    ),
+                },
+            ]
+
+        api.get_conversation.side_effect = mock_get_conversation
+        api.followup.return_value = {"id": "agent-1"}
+
+        conversation = [{"role": "assistant", "content": "plain text, no tags"}]
+        solution, analysis = _extract_with_retry(api, "agent-1", conversation)
+
+        api.followup.assert_called_once()
+        assert "Retried plan" in solution
+        assert "Retried analysis" in analysis

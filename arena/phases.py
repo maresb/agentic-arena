@@ -18,9 +18,11 @@ from arena.api import (
     wait_for_followup,
 )
 from arena.extraction import (
+    RETRY_PROMPT,
     VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
+    extract_xml_section,
     parse_verdict,
 )
 from arena.prompts import (
@@ -42,6 +44,43 @@ def _saver(state: ArenaState, path: str) -> Callable[[], None]:
         save_state(state, path)
 
     return _save
+
+
+def _extract_with_retry(
+    api: CursorCloudAPI,
+    agent_id: str,
+    conversation: list[dict],
+    *,
+    max_retries: int = 1,
+) -> tuple[str, str]:
+    """Extract solution/analysis, re-prompting once if XML tags are missing.
+
+    If the initial extraction falls back to using the full response (no
+    ``<solution>`` tag found), sends :data:`RETRY_PROMPT` as a follow-up
+    and tries again.  Returns the best available result even if the retry
+    also fails.
+    """
+    solution, analysis = extract_solution_and_analysis(conversation)
+
+    for attempt in range(max_retries):
+        # If the solution tag was found, we're good
+        text = conversation[-1].get("content") or conversation[-1].get("text", "")
+        if extract_xml_section(text, "solution") is not None:
+            break
+
+        logger.warning(
+            "No <solution> tag in agent %s response (attempt %d/%d), re-prompting",
+            agent_id,
+            attempt + 1,
+            max_retries,
+        )
+        prev_count = len(conversation)
+        api.followup(agent_id=agent_id, prompt=RETRY_PROMPT)
+        wait_for_followup(api, agent_id, prev_count)
+        conversation = api.get_conversation(agent_id)
+        solution, analysis = extract_solution_and_analysis(conversation)
+
+    return solution, analysis
 
 
 # ---------------------------------------------------------------------------
@@ -79,12 +118,14 @@ def step_solve(
     if pending:
         wait_for_all_agents(api, pending)
 
-    # Extract content from all finished agents
+    # Extract content from all finished agents (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
-        solution, analysis = extract_solution_and_analysis(conversation)
+        solution, analysis = _extract_with_retry(
+            api, state.agent_ids[alias], conversation
+        )
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
@@ -217,12 +258,14 @@ def step_revise(
     if resumed_pending:
         wait_for_all_agents(api, resumed_pending)
 
-    # Extract revised solutions
+    # Extract revised solutions (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
-        solution, analysis = extract_solution_and_analysis(conversation)
+        solution, analysis = _extract_with_retry(
+            api, state.agent_ids[alias], conversation
+        )
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
