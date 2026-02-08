@@ -9,6 +9,7 @@ from arena.extraction import (
     extract_latest_response,
     extract_solution_and_analysis,
     extract_xml_section,
+    is_assistant_message,
     parse_verdict,
 )
 
@@ -201,6 +202,47 @@ class TestParseVerdict:
 # ---------------------------------------------------------------------------
 # RETRY_PROMPT exists and is non-empty
 # ---------------------------------------------------------------------------
+
+
+class TestIsAssistantMessage:
+    def test_legacy_format(self) -> None:
+        assert is_assistant_message({"role": "assistant", "content": "hi"}) is True
+
+    def test_api_format(self) -> None:
+        assert is_assistant_message({"type": "assistant_message", "text": "hi"}) is True
+
+    def test_user_message_rejected(self) -> None:
+        assert is_assistant_message({"role": "user", "content": "hi"}) is False
+
+    def test_empty_dict(self) -> None:
+        assert is_assistant_message({}) is False
+
+
+class TestRealApiFormatExtraction:
+    """Test extraction with the real Cloud Agents API format (type/text)."""
+
+    def test_extract_solution_from_api_format(self) -> None:
+        conversation = [
+            {"type": "user_message", "text": "do something"},
+            {
+                "type": "assistant_message",
+                "text": (
+                    "<solution>\n## PLAN\nStep 1\n</solution>\n"
+                    "<analysis>\n## RISKS\nNone\n</analysis>"
+                ),
+            },
+        ]
+        solution, analysis = extract_solution_and_analysis(conversation)
+        assert "## PLAN" in solution
+        assert "## RISKS" in analysis
+
+    def test_extract_latest_response_api_format(self) -> None:
+        conversation = [
+            {"type": "assistant_message", "text": "first"},
+            {"type": "user_message", "text": "followup"},
+            {"type": "assistant_message", "text": "second"},
+        ]
+        assert extract_latest_response(conversation) == "second"
 
 
 def test_retry_prompt_is_defined() -> None:

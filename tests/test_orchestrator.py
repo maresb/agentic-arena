@@ -2,9 +2,10 @@
 
 import os
 import tempfile
+from unittest.mock import patch, MagicMock
 
-from arena.orchestrator import generate_final_report
-from arena.state import init_state
+from arena.orchestrator import _archive_round, generate_final_report, step_once
+from arena.state import Phase, init_state, save_state
 
 
 class TestGenerateFinalReport:
@@ -65,3 +66,109 @@ class TestGenerateFinalReport:
             with open(os.path.join(tmpdir, "report.md")) as f:
                 content = f.read()
             assert "alias_mapping" in content.lower() or "Alias mapping" in content
+
+
+class TestArchiveRound:
+    def test_archives_solutions_and_analyses(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "Sol A", "agent_b": "Sol B", "agent_c": "Sol C"}
+        state.analyses = {"agent_a": "Ana A", "agent_b": "Ana B", "agent_c": "Ana C"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _archive_round(state, tmpdir)
+            round_dir = os.path.join(tmpdir, "round0")
+            assert os.path.isdir(round_dir)
+
+            files = os.listdir(round_dir)
+            solution_files = [f for f in files if "solution" in f]
+            analysis_files = [f for f in files if "analysis" in f]
+            assert len(solution_files) == 3
+            assert len(analysis_files) == 3
+
+    def test_archives_critiques(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.solutions = {}
+        state.analyses = {}
+        state.critiques = {"agent_a": "Crit A"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _archive_round(state, tmpdir)
+            round_dir = os.path.join(tmpdir, "round0")
+            files = os.listdir(round_dir)
+            critique_files = [f for f in files if "critique" in f]
+            assert len(critique_files) == 1
+
+    def test_archives_verdict_on_done(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.solutions = {}
+        state.analyses = {}
+        state.phase = Phase.DONE
+        state.final_verdict = "All agents agree."
+        state.judge_history = ["agent_b"]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _archive_round(state, tmpdir)
+            round_dir = os.path.join(tmpdir, "round0")
+            files = os.listdir(round_dir)
+            verdict_files = [f for f in files if "verify" in f]
+            assert len(verdict_files) == 1
+
+    def test_empty_state_creates_empty_round_dir(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.solutions = {}
+        state.analyses = {}
+        state.critiques = {}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _archive_round(state, tmpdir)
+            round_dir = os.path.join(tmpdir, "round0")
+            assert os.path.isdir(round_dir)
+            assert os.listdir(round_dir) == []
+
+
+class TestStepOnce:
+    def test_raises_if_no_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import pytest
+
+            with pytest.raises(FileNotFoundError, match="No state file"):
+                step_once(arena_dir=tmpdir)
+
+    def test_raises_if_already_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task="test", repo="r")
+            state.completed = True
+            save_state(state, os.path.join(tmpdir, "state.json"))
+
+            import pytest
+
+            with pytest.raises(RuntimeError, match="already completed"):
+                step_once(arena_dir=tmpdir)
+
+    def test_dispatches_solve_phase(self) -> None:
+        """step_once should invoke the solve handler and save state."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task="test", repo="r")
+            save_state(state, os.path.join(tmpdir, "state.json"))
+
+            mock_api = MagicMock()
+            ids = iter(["id-1", "id-2", "id-3"])
+            mock_api.launch.side_effect = lambda **kw: {"id": next(ids)}
+            mock_api.status.return_value = {"status": "FINISHED"}
+
+            conversation = [
+                {
+                    "role": "assistant",
+                    "content": (
+                        "<solution>\n## PLAN\nStep 1\n</solution>\n"
+                        "<analysis>\n## RISKS\nNone\n</analysis>"
+                    ),
+                }
+            ]
+            mock_api.get_conversation.return_value = conversation
+
+            with patch("arena.orchestrator._make_api", return_value=mock_api):
+                result = step_once(arena_dir=tmpdir)
+
+            assert result.phase == Phase.EVALUATE
+            assert len(result.agent_ids) == 3
