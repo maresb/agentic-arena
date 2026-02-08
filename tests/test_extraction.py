@@ -183,12 +183,7 @@ class TestParseVerdict:
         assert verdict.convergence_score is None
 
     def test_malformed_score_ignored(self) -> None:
-        text = (
-            "<verdict>\n"
-            "decision: CONSENSUS\n"
-            "convergence_score: high\n"
-            "</verdict>"
-        )
+        text = "<verdict>\ndecision: CONSENSUS\nconvergence_score: high\n</verdict>"
         verdict = parse_verdict(text)
         assert verdict.decision == VerdictDecision.CONSENSUS
         assert verdict.convergence_score is None
