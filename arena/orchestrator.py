@@ -206,14 +206,29 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append("")
 
     if state.token_usage:
+        # Rough cost estimates per 1K tokens (input+output blended)
+        cost_per_1k: dict[str, float] = {
+            "opus": 0.075,
+            "gpt": 0.060,
+            "gemini": 0.035,
+        }
         report_lines.append("---")
         report_lines.append("")
-        report_lines.append("## Token Usage")
+        report_lines.append("## Token Usage & Cost Estimates")
         report_lines.append("")
+        total_cost = 0.0
         for alias, tokens in state.token_usage.items():
-            model = state.alias_mapping.get(alias, "unknown")
-            report_lines.append(f"- **{alias}** ({model}): {tokens:,} tokens")
-        report_lines.append(f"- **Total**: {sum(state.token_usage.values()):,} tokens")
+            model = str(state.alias_mapping.get(alias, "unknown"))
+            rate = cost_per_1k.get(model, 0.05)
+            cost = (tokens / 1000) * rate
+            total_cost += cost
+            report_lines.append(
+                f"- **{alias}** ({model}): {tokens:,} tokens (~${cost:.2f})"
+            )
+        report_lines.append(
+            f"- **Total**: {sum(state.token_usage.values()):,} tokens "
+            f"(~${total_cost:.2f})"
+        )
         report_lines.append("")
 
     report_path = os.path.join(arena_dir, "report.md")
