@@ -135,6 +135,7 @@ def step_solve(
     state.phase_progress = {
         a: ProgressStatus.PENDING for a in state.alias_mapping
     }
+    state.sent_msg_counts = {}
     _save()
 
 
@@ -149,8 +150,8 @@ def step_evaluate(
     """Each agent critiques the other two solutions without revising its own."""
     _save = _saver(state, state_path)
 
-    # Send all follow-ups, recording message counts for fresh sends
-    fresh_msg_counts: dict[str, int] = {}
+    # Send all follow-ups, persisting message counts for resume safety
+    fresh_aliases: set[str] = set()
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -161,34 +162,27 @@ def step_evaluate(
         others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
-        fresh_msg_counts[alias] = len(
+        state.sent_msg_counts[alias] = len(
             api.get_conversation(state.agent_ids[alias])
         )
+        state.phase_progress[alias] = ProgressStatus.SENT
+        _save()  # Persist count BEFORE sending to survive crash
+
         logger.info("Sending evaluate follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=evaluate_prompt(others),
         )
-        state.phase_progress[alias] = ProgressStatus.SENT
-        _save()
+        fresh_aliases.add(alias)
 
-    # Wait for freshly sent follow-ups (message-count based)
-    fresh_pending = {
-        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
-        for alias in fresh_msg_counts
-    }
-    if fresh_pending:
-        wait_for_all_followups(api, fresh_pending)
-
-    # Wait for resumed follow-ups from a previous run (status based)
-    resumed_pending = {
-        alias: state.agent_ids[alias]
+    # Wait for all SENT agents using persisted message counts
+    pending = {
+        alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
         if state.phase_progress.get(alias) == ProgressStatus.SENT
-        and alias not in fresh_msg_counts
     }
-    if resumed_pending:
-        wait_for_all_agents(api, resumed_pending)
+    if pending:
+        wait_for_all_followups(api, pending)
 
     # Extract critiques
     for alias in state.alias_mapping:
@@ -203,6 +197,7 @@ def step_evaluate(
     state.phase_progress = {
         a: ProgressStatus.PENDING for a in state.alias_mapping
     }
+    state.sent_msg_counts = {}
     _save()
 
 
@@ -217,8 +212,7 @@ def step_revise(
     """Each agent revises its solution based on all three critiques."""
     _save = _saver(state, state_path)
 
-    # Send all follow-ups, recording message counts for fresh sends
-    fresh_msg_counts: dict[str, int] = {}
+    # Send all follow-ups, persisting message counts for resume safety
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) in (
             ProgressStatus.SENT,
@@ -229,34 +223,26 @@ def step_revise(
         all_critiques = list(state.critiques.items())
         random.shuffle(all_critiques)
 
-        fresh_msg_counts[alias] = len(
+        state.sent_msg_counts[alias] = len(
             api.get_conversation(state.agent_ids[alias])
         )
+        state.phase_progress[alias] = ProgressStatus.SENT
+        _save()  # Persist count BEFORE sending to survive crash
+
         logger.info("Sending revise follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=revise_prompt(all_critiques),
         )
-        state.phase_progress[alias] = ProgressStatus.SENT
-        _save()
 
-    # Wait for freshly sent follow-ups (message-count based)
-    fresh_pending = {
-        alias: (state.agent_ids[alias], fresh_msg_counts[alias])
-        for alias in fresh_msg_counts
-    }
-    if fresh_pending:
-        wait_for_all_followups(api, fresh_pending)
-
-    # Wait for resumed follow-ups from a previous run (status based)
-    resumed_pending = {
-        alias: state.agent_ids[alias]
+    # Wait for all SENT agents using persisted message counts
+    pending = {
+        alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
         if state.phase_progress.get(alias) == ProgressStatus.SENT
-        and alias not in fresh_msg_counts
     }
-    if resumed_pending:
-        wait_for_all_agents(api, resumed_pending)
+    if pending:
+        wait_for_all_followups(api, pending)
 
     # Extract revised solutions (with retry on missing tags)
     for alias in state.alias_mapping:
@@ -273,6 +259,7 @@ def step_revise(
 
     state.phase = Phase.VERIFY
     state.phase_progress = {"verify": ProgressStatus.PENDING}
+    state.sent_msg_counts = {}
     _save()
 
 

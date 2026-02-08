@@ -91,6 +91,12 @@ class ArenaState(BaseModel):
     consensus_reached: bool | None = None
     final_verdict: str | None = None
 
+    # Per-agent message counts recorded when follow-ups are sent.
+    # Used for message-count-based waiting on resume after a crash,
+    # preventing stale-message extraction when an agent is already
+    # FINISHED from a previous task.
+    sent_msg_counts: dict[str, int] = Field(default_factory=dict)
+
     # Verify-phase idempotency: persisted so a crash between sending the
     # verify follow-up and completing extraction doesn't re-select a judge
     # or send a duplicate prompt on restart.
