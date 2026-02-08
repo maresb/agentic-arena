@@ -17,6 +17,49 @@ collapse to zero, adjust sprint capacity accordingly.
 
 ---
 
+## Phase 0 — Agent Branch Visibility
+
+**Goal:** Give agents access to each other's branches so the
+evaluate/revise/verify loop operates on full committed work, not just
+conversation-extracted summaries.
+
+**Motivation (from dogfooding):** The first arena run revealed that
+agents commit detailed deliverables to their branches (94–288 lines)
+but the evaluate prompts only include conversation-extracted summaries
+(1–37 lines, capturing 5–29% of actual content).  Agents critiqued
+each other's summaries, not their real work.  One agent's plan was
+called "truncated" when its branch file was actually complete.  Fixing
+this is the single highest-impact improvement to consensus quality.
+
+| # | Item | Source | Effort | Notes |
+|---|------|--------|--------|-------|
+| 0a | **Capture agent branch names** — store `branchName` from the Cursor API launch response | Dogfooding finding; enables TODO.md §UX "Let agents view each others branches" | **S** | Add `branch_names: dict[str, str]` to `ArenaState`.  In `step_solve`, extract `target.branchName` from the `launch()` response and persist it.  The Cursor API returns this field in agent responses. |
+| 0b | **Add branch hints to prompts** — tell agents each other's branch names in evaluate, revise, and verify prompts | Dogfooding finding | **S** | Add an optional `branch_names` parameter to `evaluate_prompt()`, `revise_prompt()`, and `verify_prompt()`.  When present, append a block: "Each agent's full work is committed to their branch.  If a summary above seems incomplete, run `git fetch origin <branch>` and inspect their commits." with per-agent branch names.  Omit the block when branch names are absent (backward-compatible). |
+| 0c | **Thread branch names through phases** — pass captured branch names to prompt functions | Dogfooding finding | **S** | In `step_evaluate`, `step_revise`, and `step_verify`, pass `state.branch_names` when calling prompt functions.  Requires `branch_names` to already be captured in 0a. |
+
+**Dependencies:** None (this is the first phase).
+
+**Internal ordering:** 0a → 0b → 0c.  Branch name capture first,
+then prompt changes, then wiring.  All three are S-effort and can
+ship as a single PR.
+
+**Risks / open questions:**
+
+- *Branch name availability:* The `branchName` field may be absent in
+  some API responses (e.g., if the agent hasn't created a branch yet).
+  Handle gracefully by omitting branch hints when names are missing.
+- *Agent compliance:* Agents might not always `git fetch` even when
+  instructed.  But the prompt explicitly tells them to do so when
+  summaries look incomplete, and frontier models reliably follow
+  such instructions.
+- *Conversation extraction unchanged:* `state.solutions` still
+  contains conversation-extracted summaries.  This is acceptable —
+  agents now have a way to access the full content on demand.  A
+  future optimization could replace pasted summaries with branch-only
+  references, but that's a separate change (see Phase 3c).
+
+---
+
 ## Phase 1 — Observability & UX Foundation
 
 **Goal:** Establish a clean, observable debugging baseline for
@@ -31,7 +74,8 @@ running the orchestrator sees), not agent-side capabilities.
 | 1b | **Externalize large text from state.json** — store solutions, analyses, critiques, and verdicts as separate Markdown files; keep only relative file-path pointers in `state.json` | TODO.md §UX "Externalize large text from state.json" | **L** | Touches `ArenaState` model (new path-valued fields or a serialization hook), `save_state`/`load_state`, every call-site in `phases.py` that writes `state.solutions[alias]`, and `generate_final_report`.  Must remain backwards-compatible with existing state files (migration shim: read inline text on load, always write externalized form on save). |
 | 1c | **Rearchitect arena directory layout** — `arenas/<NNNN>/` with chronologically-named artifact files | TODO.md §UX "Rearchitect the arena directory layout"; TODO_IMPROVEMENTS.md §1 "Artifact Naming & Organization" | **L** | Replaces the current `arena/` data directory with `arenas/` containing numbered runs.  The `arena/` Python package remains code-only.  Artifact naming per §1: `{round:02d}-{phase:02d}-{phase_name}-{letter}-{model}-{uid}.md`.  Depends on 1b so file-path pointers are already in place.  Rewrites `_archive_round` in `orchestrator.py`. |
 
-**Dependencies:** None (this is the first phase).
+**Dependencies:** Phase 0 (branch visibility improves any arena run
+used to implement this phase).
 
 **Internal ordering:** 1a → 1b → 1c.  The polling indicator is
 trivial and delivers immediate value within hours.  Externalizing text
@@ -106,28 +150,25 @@ from Phase 1 to keep the observability baseline tight.
 | # | Item | Source | Effort | Notes |
 |---|------|--------|--------|-------|
 | 3a | **Configurable model list** (`--models` CLI flag) | TODO.md §Features "Configurable model list" | **M** | Add `--models` to `init` accepting a comma-separated list (e.g. `opus,gpt`).  Validate against `api.list_models()`.  Dynamically size `ALIASES`.  Update `init_state`, `ArenaConfig`, and `MODELS` in `prompts.py`. |
-| 3b | **Merge strategy — print PR URL for winner** | TODO_IMPROVEMENTS.md §2 "Merge Strategy" | **S** | At the end of `generate_final_report` and CLI output, print the GitHub compare/PR URL for the winning agent's branch.  Requires storing per-agent branch names in state during `step_solve`.  No auto-merge. |
-| 3c | **Let agents view each other's branches** (`git fetch` instead of pasting) | TODO.md §UX "Let agents view each others branches" | **M** | Instruct agents to `git fetch` sibling branches and review diffs instead of embedding full solution text in prompts.  Requires per-agent branch names in state (shared prerequisite with 3b) and modifying `evaluate_prompt` / `revise_prompt`.  Should be opt-in (`--branch-sharing`) with paste-based fallback. |
+| 3b | **Merge strategy — print PR URL for winner** | TODO_IMPROVEMENTS.md §2 "Merge Strategy" | **S** | At the end of `generate_final_report` and CLI output, print the GitHub compare/PR URL for the winning agent's branch.  Uses `state.branch_names` already captured in Phase 0.  No auto-merge. |
+| 3c | **Branch-only evaluation mode** (opt-in) | TODO.md §UX "Let agents view each others branches" | **M** | Phase 0 adds branch hints alongside pasted summaries.  This item goes further: in `--branch-only` mode, omit pasted solution text entirely and rely on agents fetching branches.  Reduces prompt token usage but requires agents to always `git fetch`.  Paste-based mode remains the default. |
 | 3d | **Treat verify-command results as first-class outputs** | TODO.md §Features "Treat verify-command results as first-class outputs" | **M** | `verify_results` exists on `ArenaState`.  Extend: (1) structured pass/fail per command, (2) `--verify-mode advisory|gating` flag, (3) in gating mode, override CONSENSUS to CONTINUE on failure, inject failure output into next round's prompts. |
 | 3e | **Wire RETRY_PROMPT into phases** | TODO.md §Features "Wire RETRY_PROMPT into phases" | **S** | **\[Verify + Test\]** `_extract_with_retry` already exists and is called in `step_solve` and `step_revise`.  Verify consistent use in all extraction paths.  Add test coverage for the retry and re-extract path. |
 
-**Dependencies:** Phase 2 (correctness fixes).  3b and 3c share the
-prerequisite of per-agent branch name storage (implement once in 3b,
-reuse in 3c).
+**Dependencies:** Phase 2 (correctness fixes).  Phase 0 (branch name
+capture and prompt hints already in place).
 
 **Internal ordering:** 3a → 3e → 3b → 3c → 3d.  Model configurability
 first (unblocks multi-model testing), then the easy wins (retry
-verification, PR URL), then branch sharing, then verify gating (most
+verification, PR URL), then branch-only mode, then verify gating (most
 complex).
 
 **Risks / open questions:**
 
-- *3c reliability:* Agents may fail to `git fetch` due to permissions
-  or network constraints.  A paste-based fallback is essential.
-  Ship as opt-in via `--branch-sharing`.
-- *3b branch names:* Confirm whether the Cursor launch API returns the
-  agent's working branch name.  If not, derive from agent ID or
-  require a naming convention.
+- *3c reliability:* In branch-only mode, agents must `git fetch` to
+  see solutions at all.  If fetching fails, the agent has no context.
+  Keep paste-based mode as the default; branch-only is opt-in via
+  `--branch-only`.
 - *3d gating cascades:* If verify commands fail in gating mode, the
   next round's prompts need failure output.  Design prompt injection
   before implementing.
@@ -250,19 +291,20 @@ then detailed reference docs, then runbook.
 
 | Phase | Name | Effort | Key deliverable |
 |-------|------|--------|-----------------|
+| 0 | Agent Branch Visibility | **S** | Branch name capture, prompt hints for cross-agent inspection |
 | 1 | Observability & UX Foundation | **L** | Polling dots, externalized artifacts, new directory layout |
 | 2 | Reliability & Correctness | **M** | State path fix, safe resume, verified idempotency, stable archiving |
-| 3 | Core Features & Workflow | **L** | Model config, PR URL, branch sharing, verify gating, retry |
+| 3 | Core Features & Workflow | **L** | Model config, PR URL, branch-only mode, verify gating, retry |
 | 4 | Optimization & Scaling | **XL** | Progress refactor, token monitoring, context management |
 | 5 | Code Quality, Testing & CI | **XL** | Stale-item audit, CI pipeline, +17 tests, integration harness |
 | 6 | Webhook Support | **XL** | Event-driven polling (contingent on API support) |
 | 7 | Documentation | **M** | README, auth/restart docs, runbook |
 
 ```
-Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6
-                                                     │
-                                                     ▼
-                                                  Phase 7
+Phase 0 ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6
+                                                                 │
+                                                                 ▼
+                                                              Phase 7
 ```
 
 Phases 6 and 7 are semi-independent: documentation can begin
