@@ -1,8 +1,9 @@
 """CLI entry point for the Agentic Arena.
 
 Usage:
-    python -m arena init --task "..." --repo owner/repo [options]
-    python -m arena run  [--arena-dir arena]
+    python -m arena init   --task "..." --repo owner/repo [options]
+    python -m arena run    [--arena-dir arena]
+    python -m arena step   [--arena-dir arena]
     python -m arena status [--arena-dir arena]
 """
 
@@ -18,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
-from arena.orchestrator import run_orchestrator
+from arena.orchestrator import generate_final_report, run_orchestrator, step_once
 from arena.state import load_state, save_state, init_state
 
 app = typer.Typer(
@@ -109,6 +110,41 @@ def run(
     """Run the arena orchestrator."""
     _setup_logging(arena_dir, verbose=verbose)
     run_orchestrator(arena_dir=arena_dir)
+
+
+@app.command()
+def step(
+    arena_dir: Annotated[
+        str, typer.Option(help="Directory for arena state and outputs")
+    ] = "arena",
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
+    ] = False,
+) -> None:
+    """Execute a single phase transition (one FSM step)."""
+    _setup_logging(arena_dir, verbose=verbose)
+
+    state_path = os.path.join(arena_dir, "state.json")
+    before = load_state(state_path)
+    if before is None:
+        typer.echo(f"No arena state found at {state_path}")
+        raise typer.Exit(code=1)
+    if before.completed:
+        typer.echo("Arena is already completed. Nothing to do.")
+        raise typer.Exit(code=0)
+
+    before_phase = before.phase
+    before_round = before.round
+
+    state = step_once(arena_dir=arena_dir)
+
+    typer.echo(f"{before_phase} -> {state.phase} (round {before_round})")
+    if state.completed:
+        generate_final_report(state, arena_dir)
+        consensus = state.consensus_reached
+        typer.echo(
+            f"Arena complete: {'consensus reached' if consensus else 'no consensus (max rounds)'}"
+        )
 
 
 @app.command()
