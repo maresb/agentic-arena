@@ -12,6 +12,8 @@ the current codebase to confirm they are still open.  Items marked
 **\[Verify + Test\]** appear to already be partially or fully
 implemented — the work is to *confirm* correctness and add test
 coverage, not to reimplement.  See the Appendix for evidence.
+After the audit, **re-estimate effort** for the phase: if stale items
+collapse to zero, adjust sprint capacity accordingly.
 
 ---
 
