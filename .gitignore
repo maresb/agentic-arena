@@ -14,6 +14,8 @@ arena/state.json
 arena/round*/
 arena/report.md
 arena/orchestrator.log
+arena/artifacts/
+arenas/
 
 # IDE
 .vscode/
