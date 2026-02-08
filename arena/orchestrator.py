@@ -1,8 +1,13 @@
 """Main orchestrator loop and report generation.
 
-The orchestrator reads state, dispatches to the appropriate phase function,
-and loops until the arena is complete. It is fully stateless: all progress
-lives in the state file.
+The orchestrator is a simple FSM: solve -> evaluate -> revise -> verify,
+looping back to evaluate until consensus or max rounds.  All progress
+lives in the state file, so the process can be killed and restarted at
+any point.
+
+The core primitive is :func:`step_once`, which executes exactly one phase
+transition.  :func:`run_orchestrator` is a convenience wrapper that loops
+``step_once`` until the arena is complete.
 """
 
 from __future__ import annotations
@@ -10,13 +15,39 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Callable
 
 from arena.api import CursorCloudAPI
 from arena.phases import step_evaluate, step_revise, step_solve, step_verify
 from arena.state import ArenaState, Phase, load_state, save_state
 
 logger = logging.getLogger("arena")
+
+# ---------------------------------------------------------------------------
+# Phase dispatch table
+# ---------------------------------------------------------------------------
+
+PHASE_HANDLERS = {
+    Phase.SOLVE: step_solve,
+    Phase.EVALUATE: step_evaluate,
+    Phase.REVISE: step_revise,
+    Phase.VERIFY: step_verify,
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_api() -> CursorCloudAPI:
+    """Create a :class:`CursorCloudAPI` from the ``CURSOR_API_KEY`` env var."""
+    api_key = os.environ.get("CURSOR_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "CURSOR_API_KEY environment variable is not set. "
+            "Export your Cursor API key to proceed."
+        )
+    return CursorCloudAPI(api_key)
 
 
 def _archive_round(state: ArenaState, arena_dir: str) -> None:
@@ -105,8 +136,21 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     logger.info("Final report written to %s", report_path)
 
 
-def run_orchestrator(arena_dir: str = "arena") -> None:
-    """Main loop: read state, dispatch phase, repeat until done."""
+def step_once(arena_dir: str = "arena") -> ArenaState:
+    """Execute exactly one phase transition and return the updated state.
+
+    This is the core FSM primitive.  It loads the state, dispatches the
+    current phase handler, archives outputs, saves the state, and returns.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no state file exists.
+    RuntimeError
+        If the arena is already completed or CURSOR_API_KEY is missing.
+    ValueError
+        If the current phase has no handler (e.g. ``done``).
+    """
     state_path = os.path.join(arena_dir, "state.json")
     state = load_state(state_path)
     if state is None:
@@ -114,34 +158,29 @@ def run_orchestrator(arena_dir: str = "arena") -> None:
             f"No state file found at {state_path}. "
             "Use 'python -m arena init' to create one."
         )
+    if state.completed:
+        raise RuntimeError("Arena is already completed.")
 
-    api_key = os.environ.get("CURSOR_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "CURSOR_API_KEY environment variable is not set. "
-            "Export your Cursor API key to proceed."
-        )
-    api = CursorCloudAPI(api_key)
+    before_phase = state.phase
+    handler = PHASE_HANDLERS.get(before_phase)
+    if handler is None:
+        raise ValueError(f"Unknown or terminal phase: {before_phase}")
 
-    phase_handlers: dict[Phase, Callable[[ArenaState, CursorCloudAPI], None]] = {
-        Phase.SOLVE: step_solve,
-        Phase.EVALUATE: step_evaluate,
-        Phase.REVISE: step_revise,
-        Phase.VERIFY: step_verify,
-    }
+    api = _make_api()
+    logger.info("=== Round %d | Phase: %s ===", state.round, before_phase)
+    handler(state, api)
 
-    while not state.completed:
-        phase = state.phase
-        handler = phase_handlers.get(phase)
-        if handler is None:
-            raise ValueError(f"Unknown or terminal phase: {phase}")
+    _archive_round(state, arena_dir)
+    save_state(state, state_path)
+    return state
 
-        logger.info("=== Round %d | Phase: %s ===", state.round, phase)
-        handler(state, api)
 
-        # Archive after each phase transition
-        _archive_round(state, arena_dir)
-        save_state(state, state_path)
+def run_orchestrator(arena_dir: str = "arena") -> None:
+    """Loop :func:`step_once` until the arena is complete, then report."""
+    while True:
+        state = step_once(arena_dir)
+        if state.completed:
+            break
 
     generate_final_report(state, arena_dir)
 
