@@ -16,6 +16,7 @@ logger = logging.getLogger("arena")
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 5
 BASE_BACKOFF = 2.0  # seconds
+DEFAULT_TIMEOUT = 60  # seconds per HTTP request
 
 
 class CursorCloudAPI:
@@ -28,17 +29,44 @@ class CursorCloudAPI:
 
     BASE = "https://api.cursor.com/v0"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout: int = DEFAULT_TIMEOUT,
+    ) -> None:
         self.auth = (api_key, "")  # Basic Auth: key as username, empty password
         self.content_type_headers = {"Content-Type": "application/json"}
+        self.timeout = timeout
 
     def _request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
-        """HTTP request with retry and exponential backoff."""
+        """HTTP request with retry and exponential backoff.
+
+        Retries on both retryable HTTP status codes and connection-level
+        errors (``ConnectionError``, ``Timeout``).  A per-request timeout
+        prevents indefinite hangs.
+        """
         kwargs.setdefault("auth", self.auth)
         kwargs.setdefault("headers", self.content_type_headers)
+        kwargs.setdefault("timeout", self.timeout)
         r: requests.Response | None = None
         for attempt in range(MAX_RETRIES):
-            r = requests.request(method, url, **kwargs)
+            try:
+                r = requests.request(method, url, **kwargs)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                wait = BASE_BACKOFF * (2**attempt) + random.uniform(0, 1)
+                logger.warning(
+                    "%s from %s (attempt %d/%d), waiting %.1fs",
+                    type(exc).__name__,
+                    url,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    wait,
+                )
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                time.sleep(wait)
+                continue
             if r.status_code not in RETRYABLE_STATUS_CODES:
                 r.raise_for_status()
                 return r
