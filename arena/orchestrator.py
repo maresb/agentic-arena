@@ -205,6 +205,17 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append(f"**PR URL:** {pr_url}")
             report_lines.append("")
 
+    if state.token_usage:
+        report_lines.append("---")
+        report_lines.append("")
+        report_lines.append("## Token Usage")
+        report_lines.append("")
+        for alias, tokens in state.token_usage.items():
+            model = state.alias_mapping.get(alias, "unknown")
+            report_lines.append(f"- **{alias}** ({model}): {tokens:,} tokens")
+        report_lines.append(f"- **Total**: {sum(state.token_usage.values()):,} tokens")
+        report_lines.append("")
+
     report_path = os.path.join(arena_dir, "report.md")
     with open(report_path, "w") as f:
         f.write("\n".join(report_lines))

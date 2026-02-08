@@ -37,6 +37,16 @@ from arena.state import ArenaState, Phase, ProgressStatus, save_state
 logger = logging.getLogger("arena")
 
 
+def _update_token_usage(state: ArenaState, alias: str, conversation: list[dict]) -> None:
+    """Update cumulative token usage for *alias* from conversation metadata."""
+    total = 0
+    for msg in conversation:
+        usage = msg.get("usage", {})
+        total += usage.get("total_tokens", 0)
+    if total > 0:
+        state.token_usage[alias] = total
+
+
 def _saver(state: ArenaState, path: str) -> Callable[[], None]:
     """Return a zero-arg closure that persists *state* to *path*."""
 
@@ -127,6 +137,7 @@ def step_solve(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
         solution, analysis = _extract_with_retry(
             api, state.agent_ids[alias], conversation
         )
@@ -203,6 +214,7 @@ def step_evaluate(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
         state.critiques[alias] = extract_latest_response(conversation)
         state.phase_progress[alias] = ProgressStatus.DONE
         _save()
@@ -266,6 +278,7 @@ def step_revise(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
         solution, analysis = _extract_with_retry(
             api, state.agent_ids[alias], conversation
         )
@@ -275,7 +288,8 @@ def step_revise(
         _save()
 
     state.phase = Phase.VERIFY
-    state.phase_progress = {"verify": ProgressStatus.PENDING}
+    state.phase_progress = {}
+    state.verify_progress = ProgressStatus.PENDING
     state.sent_msg_counts = {}
     _save()
 
@@ -297,7 +311,7 @@ def step_verify(
     """
     _save = _saver(state, state_path)
 
-    if state.phase_progress.get("verify") == ProgressStatus.DONE:
+    if state.verify_progress == ProgressStatus.DONE:
         return
 
     # ── Step 1: Select judge (idempotent — only if not already chosen) ──
@@ -315,10 +329,10 @@ def step_verify(
 
     # ── Step 2: Send verdict prompt (with crash-recovery re-send) ──
     need_send = False
-    if state.phase_progress.get("verify") != ProgressStatus.SENT:
+    if state.verify_progress != ProgressStatus.SENT:
         # Fresh send
         state.verify_prev_msg_count = len(api.get_conversation(state.agent_ids[judge]))
-        state.phase_progress["verify"] = ProgressStatus.SENT
+        state.verify_progress = ProgressStatus.SENT
         _save()  # Persist BEFORE the follow-up so a crash won't re-send
         need_send = True
     else:
@@ -411,7 +425,8 @@ def step_verify(
         state.critiques = {}
         state.verify_judge = None
         state.verify_prev_msg_count = None
+        state.verify_progress = ProgressStatus.PENDING
         state.verify_results = []
 
-    state.phase_progress["verify"] = ProgressStatus.DONE
+    state.verify_progress = ProgressStatus.DONE
     _save()

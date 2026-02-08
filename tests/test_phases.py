@@ -214,7 +214,7 @@ class TestStepRevise:
         step_revise(state, api)
 
         assert state.phase == Phase.VERIFY
-        assert state.phase_progress["verify"] == ProgressStatus.PENDING
+        assert state.verify_progress == ProgressStatus.PENDING
 
 
 class TestStepVerify:
@@ -222,7 +222,7 @@ class TestStepVerify:
         """Create a state that's ready for verify."""
         state = init_state(task="test", repo="r")
         state.phase = Phase.VERIFY
-        state.phase_progress = {"verify": ProgressStatus.PENDING}
+        state.verify_progress = ProgressStatus.PENDING
         for i, alias in enumerate(state.alias_mapping):
             state.agent_ids[alias] = f"agent-{i}"
             state.solutions[alias] = f"Revised solution from {alias}"
@@ -348,7 +348,7 @@ class TestStepVerify:
         state = self._make_revised_state()
         state.verify_judge = "agent_a"
         state.judge_history = ["agent_a"]
-        state.phase_progress["verify"] = ProgressStatus.SENT
+        state.verify_progress = ProgressStatus.SENT
         # prev_msg_count=0 means the conversation already has a response
         # (the agent responded to the follow-up sent in a previous run)
         state.verify_prev_msg_count = 0

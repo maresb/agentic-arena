@@ -72,6 +72,7 @@ class ArenaConfig(BaseModel, frozen=True):
     models: list[str] = Field(default_factory=lambda: list(ModelName))
     branch_only: bool = False
     verify_mode: str = "advisory"  # "advisory" or "gating"
+    context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
 
 
 class ArenaState(BaseModel):
@@ -105,6 +106,9 @@ class ArenaState(BaseModel):
     # nested Pydantic model keyed by alias.
     sent_msg_counts: dict[str, int] = Field(default_factory=dict)
 
+    # Verify-phase tracking: separate from per-agent phase_progress
+    verify_progress: ProgressStatus = ProgressStatus.PENDING
+
     # Verify-phase idempotency: persisted so a crash between sending the
     # verify follow-up and completing extraction doesn't re-select a judge
     # or send a duplicate prompt on restart.
@@ -118,6 +122,9 @@ class ArenaState(BaseModel):
     # Agent branch names: captured from the launch API response so that
     # agents can inspect each other's committed work via git fetch.
     branch_names: dict[str, str] = Field(default_factory=dict)
+
+    # Token usage tracking: cumulative per-alias totals
+    token_usage: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
