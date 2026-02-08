@@ -24,8 +24,28 @@ See [`proposal.md`](proposal.md) for the full design rationale.
 ### Prerequisites
 
 - [pixi](https://pixi.sh) for package management (Python 3.13 is installed automatically).
-- A **Cursor API key** exported as `CURSOR_API_KEY`.
+- A **Cursor API key** (see below).
 - A **GitHub repository** connected to your Cursor account.
+
+### Obtaining a Cursor API key
+
+The arena uses the [Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints)
+to launch and manage agents. You need a **User API key** (not a BYOK key for
+third-party providers).
+
+1. Sign in at [cursor.com/dashboard](https://cursor.com/dashboard).
+2. Go to the **Integrations** tab
+   ([direct link](https://cursor.com/dashboard?tab=integrations)).
+3. Click **Create New API Key**, give it a name, and copy the generated key.
+   You will not be able to see the key again after leaving the page.
+4. Export the key in your shell:
+
+```bash
+export CURSOR_API_KEY="key_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+> **Note:** Free-plan API keys do **not** support the Cloud Agents API. You
+> need a paid Cursor plan (Pro, Business, or Enterprise).
 
 ### Install
 
