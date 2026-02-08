@@ -36,7 +36,7 @@ repos:
     types: [python]
   - id: mypy
     name: mypy (type checker)
-    entry: pixi run mypy --ignore-missing-imports
+    entry: pixi run mypy --ignore-missing-imports arena/
     language: system
     pass_filenames: false
     types: [python]
