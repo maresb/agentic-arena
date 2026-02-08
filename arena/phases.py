@@ -152,28 +152,35 @@ def step_evaluate(
     """Each agent critiques the other two solutions without revising its own."""
     _save = _saver(state, state_path)
 
-    # Send all follow-ups, persisting message counts for resume safety
-    fresh_aliases: set[str] = set()
+    # Send all follow-ups, persisting message counts for resume safety.
+    # On resume, re-send to SENT agents whose message count hasn't changed
+    # (crash between persisting SENT and the actual POST).
     for alias in state.alias_mapping:
-        if state.phase_progress.get(alias) in (
-            ProgressStatus.SENT,
-            ProgressStatus.DONE,
-        ):
+        if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
 
         others = [(k, v) for k, v in state.solutions.items() if k != alias]
         random.shuffle(others)  # Presentation-order neutrality
 
-        state.sent_msg_counts[alias] = len(api.get_conversation(state.agent_ids[alias]))
-        state.phase_progress[alias] = ProgressStatus.SENT
-        _save()  # Persist count BEFORE sending to survive crash
+        if state.phase_progress.get(alias) == ProgressStatus.SENT:
+            # Resume path: re-send if the agent never got the message
+            current_count = len(api.get_conversation(state.agent_ids[alias]))
+            saved_count = state.sent_msg_counts.get(alias, 0)
+            if current_count > saved_count:
+                continue  # Agent already received and may have replied
+            logger.info("Re-sending evaluate follow-up to %s (crash recovery)", alias)
+        else:
+            state.sent_msg_counts[alias] = len(
+                api.get_conversation(state.agent_ids[alias])
+            )
+            state.phase_progress[alias] = ProgressStatus.SENT
+            _save()  # Persist count BEFORE sending to survive crash
+            logger.info("Sending evaluate follow-up to %s", alias)
 
-        logger.info("Sending evaluate follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=evaluate_prompt(others, branch_names=state.branch_names or None),
         )
-        fresh_aliases.add(alias)
 
     # Wait for all SENT agents using persisted message counts
     pending = {
@@ -210,22 +217,29 @@ def step_revise(
     """Each agent revises its solution based on all three critiques."""
     _save = _saver(state, state_path)
 
-    # Send all follow-ups, persisting message counts for resume safety
+    # Send all follow-ups, persisting message counts for resume safety.
+    # On resume, re-send to SENT agents whose message count hasn't changed.
     for alias in state.alias_mapping:
-        if state.phase_progress.get(alias) in (
-            ProgressStatus.SENT,
-            ProgressStatus.DONE,
-        ):
+        if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
 
         all_critiques = list(state.critiques.items())
         random.shuffle(all_critiques)
 
-        state.sent_msg_counts[alias] = len(api.get_conversation(state.agent_ids[alias]))
-        state.phase_progress[alias] = ProgressStatus.SENT
-        _save()  # Persist count BEFORE sending to survive crash
+        if state.phase_progress.get(alias) == ProgressStatus.SENT:
+            current_count = len(api.get_conversation(state.agent_ids[alias]))
+            saved_count = state.sent_msg_counts.get(alias, 0)
+            if current_count > saved_count:
+                continue  # Agent already received and may have replied
+            logger.info("Re-sending revise follow-up to %s (crash recovery)", alias)
+        else:
+            state.sent_msg_counts[alias] = len(
+                api.get_conversation(state.agent_ids[alias])
+            )
+            state.phase_progress[alias] = ProgressStatus.SENT
+            _save()  # Persist count BEFORE sending to survive crash
+            logger.info("Sending revise follow-up to %s", alias)
 
-        logger.info("Sending revise follow-up to %s", alias)
         api.followup(
             agent_id=state.agent_ids[alias],
             prompt=revise_prompt(all_critiques, branch_names=state.branch_names or None),
@@ -292,15 +306,25 @@ def step_verify(
     judge = state.verify_judge
     logger.info("Judge for round %d: %s", state.round, judge)
 
-    # ── Step 2: Send verdict prompt (idempotent — only if not SENT) ──
+    # ── Step 2: Send verdict prompt (with crash-recovery re-send) ──
+    need_send = False
     if state.phase_progress.get("verify") != ProgressStatus.SENT:
-        solutions = list(state.solutions.items())
-        analyses = list(state.analyses.items())
-
+        # Fresh send
         state.verify_prev_msg_count = len(api.get_conversation(state.agent_ids[judge]))
         state.phase_progress["verify"] = ProgressStatus.SENT
         _save()  # Persist BEFORE the follow-up so a crash won't re-send
+        need_send = True
+    else:
+        # Resume path: re-send if the judge never got the message
+        current_count = len(api.get_conversation(state.agent_ids[judge]))
+        saved_count = state.verify_prev_msg_count or 0
+        if current_count <= saved_count:
+            logger.info("Re-sending verify follow-up to judge %s (crash recovery)", judge)
+            need_send = True
 
+    if need_send:
+        solutions = list(state.solutions.items())
+        analyses = list(state.analyses.items())
         logger.info("Sending verify follow-up to judge %s", judge)
         api.followup(
             agent_id=state.agent_ids[judge],
