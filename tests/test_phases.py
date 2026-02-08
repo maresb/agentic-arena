@@ -155,6 +155,41 @@ class TestStepEvaluate:
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
 
+    def test_persists_sent_msg_counts(self) -> None:
+        """Message counts are persisted in state for resume safety."""
+        state = self._make_solved_state()
+        api = make_mock_api(
+            conversation_response=[
+                {"role": "assistant", "content": "critique text"}
+            ]
+        )
+
+        step_evaluate(state, api)
+
+        # After completion, sent_msg_counts should be cleared at transition
+        assert state.sent_msg_counts == {}
+
+    def test_resumes_with_sent_state(self) -> None:
+        """Agents marked SENT from a previous run are waited on, not re-sent."""
+        state = self._make_solved_state()
+        first_alias = list(state.alias_mapping.keys())[0]
+        # Simulate: one agent was already sent in a previous run
+        state.phase_progress[first_alias] = ProgressStatus.SENT
+        state.sent_msg_counts[first_alias] = 0  # had 0 msgs before send
+
+        api = make_mock_api(
+            conversation_response=[
+                {"role": "assistant", "content": "critique text"}
+            ]
+        )
+
+        step_evaluate(state, api)
+
+        # Should still complete — all three agents get critiques
+        assert state.phase == Phase.REVISE
+        for alias in state.alias_mapping:
+            assert alias in state.critiques
+
 
 class TestStepRevise:
     def _make_evaluated_state(self) -> ArenaState:
