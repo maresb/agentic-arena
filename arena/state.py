@@ -91,6 +91,16 @@ class ArenaState(BaseModel):
     consensus_reached: bool | None = None
     final_verdict: str | None = None
 
+    # Verify-phase idempotency: persisted so a crash between sending the
+    # verify follow-up and completing extraction doesn't re-select a judge
+    # or send a duplicate prompt on restart.
+    verify_judge: str | None = None
+    verify_prev_msg_count: int | None = None
+
+    # Verify command outputs: stored as first-class data so the report
+    # can include them and failures can optionally veto consensus.
+    verify_results: list[str] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers

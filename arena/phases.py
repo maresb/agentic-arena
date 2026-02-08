@@ -284,31 +284,50 @@ def step_revise(
 def step_verify(
     state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
 ) -> None:
-    """A rotating judge evaluates all revised solutions for consensus."""
+    """A rotating judge evaluates all revised solutions for consensus.
+
+    This phase is fully idempotent: the selected judge and pre-followup
+    message count are persisted to state *before* the follow-up is sent,
+    so a crash-and-restart will not re-select a judge or send a duplicate
+    prompt.
+    """
     _save = _saver(state, state_path)
 
     if state.phase_progress.get("verify") == ProgressStatus.DONE:
         return
 
-    # Select judge — rotate through aliases, randomize within available
-    used = state.judge_history
-    available = [a for a in state.alias_mapping if a not in used]
-    if not available:
-        available = list(state.alias_mapping)
-    judge = random.choice(available)
-    state.judge_history.append(judge)
-    logger.info("Selected judge: %s (round %d)", judge, state.round)
+    # ── Step 1: Select judge (idempotent — only if not already chosen) ──
+    if state.verify_judge is None:
+        used = state.judge_history
+        available = [a for a in state.alias_mapping if a not in used]
+        if not available:
+            available = list(state.alias_mapping)
+        state.verify_judge = random.choice(available)
+        state.judge_history.append(state.verify_judge)
+        _save()
 
-    # Collect inputs
-    solutions = list(state.solutions.items())
-    analyses = list(state.analyses.items())
+    judge = state.verify_judge
+    logger.info("Judge for round %d: %s", state.round, judge)
 
-    prev_count = len(api.get_conversation(state.agent_ids[judge]))
-    logger.info("Sending verify follow-up to judge %s", judge)
-    api.followup(
-        agent_id=state.agent_ids[judge],
-        prompt=verify_prompt(solutions, analyses),
-    )
+    # ── Step 2: Send verdict prompt (idempotent — only if not SENT) ──
+    if state.phase_progress.get("verify") != ProgressStatus.SENT:
+        solutions = list(state.solutions.items())
+        analyses = list(state.analyses.items())
+
+        state.verify_prev_msg_count = len(
+            api.get_conversation(state.agent_ids[judge])
+        )
+        state.phase_progress["verify"] = ProgressStatus.SENT
+        _save()  # Persist BEFORE the follow-up so a crash won't re-send
+
+        logger.info("Sending verify follow-up to judge %s", judge)
+        api.followup(
+            agent_id=state.agent_ids[judge],
+            prompt=verify_prompt(solutions, analyses),
+        )
+
+    # ── Step 3: Wait for response and extract verdict ──
+    prev_count = state.verify_prev_msg_count or 0
     wait_for_followup(api, state.agent_ids[judge], prev_count)
 
     conversation = api.get_conversation(state.agent_ids[judge])
@@ -319,21 +338,41 @@ def step_verify(
         "Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score
     )
 
-    # Run optional verification commands for code tasks
+    # ── Step 4: Enforce convergence_score >= 8 for consensus ──
+    if (
+        verdict.decision == VerdictDecision.CONSENSUS
+        and verdict.convergence_score is not None
+        and verdict.convergence_score < 8
+    ):
+        logger.warning(
+            "Judge declared CONSENSUS but convergence_score=%d < 8; "
+            "overriding to CONTINUE per proposal rules",
+            verdict.convergence_score,
+        )
+        verdict.decision = VerdictDecision.CONTINUE
+
+    # ── Step 5: Run optional verification commands for code tasks ──
     if (
         state.config.verify_commands
         and verdict.decision == VerdictDecision.CONSENSUS
     ):
+        state.verify_results = []
         for cmd in state.config.verify_commands:
-            prev_count = len(api.get_conversation(state.agent_ids[judge]))
+            cmd_prev_count = len(
+                api.get_conversation(state.agent_ids[judge])
+            )
             logger.info("Running verify command via judge: %s", cmd)
             api.followup(
                 agent_id=state.agent_ids[judge],
                 prompt=f"Run this command and report the result: {cmd}",
             )
-            wait_for_followup(api, state.agent_ids[judge], prev_count)
+            wait_for_followup(api, state.agent_ids[judge], cmd_prev_count)
+            cmd_conversation = api.get_conversation(state.agent_ids[judge])
+            cmd_result = extract_latest_response(cmd_conversation)
+            state.verify_results.append(cmd_result)
+            _save()
 
-    # Determine next phase
+    # ── Step 6: Determine next phase ──
     if verdict.decision == VerdictDecision.CONSENSUS:
         state.phase = Phase.DONE
         state.completed = True
@@ -350,8 +389,11 @@ def step_verify(
         state.phase_progress = {
             a: ProgressStatus.PENDING for a in state.alias_mapping
         }
-        # Clear critiques for the new round
+        # Clear per-round transient state
         state.critiques = {}
+        state.verify_judge = None
+        state.verify_prev_msg_count = None
+        state.verify_results = []
 
     state.phase_progress["verify"] = ProgressStatus.DONE
     _save()
