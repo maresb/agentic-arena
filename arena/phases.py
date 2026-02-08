@@ -419,20 +419,22 @@ def step_verify(
         state.completed = True
         state.consensus_reached = True
         state.final_verdict = verdict_text
+        state.verify_progress = ProgressStatus.DONE
     elif state.round >= state.config.max_rounds:
         state.phase = Phase.DONE
         state.completed = True
         state.consensus_reached = False
         state.final_verdict = verdict_text
+        state.verify_progress = ProgressStatus.DONE
     else:
         state.round += 1
         state.phase = Phase.EVALUATE
         state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
+        state.verify_progress = ProgressStatus.PENDING
         # Clear per-round transient state
         state.critiques = {}
         state.verify_judge = None
         state.verify_prev_msg_count = None
         state.verify_results = []
 
-    state.verify_progress = ProgressStatus.DONE
     _save()
