@@ -1,8 +1,8 @@
 """Integration test harness for live API testing.
 
 These tests require a real CURSOR_API_KEY and hit the actual Cursor Cloud
-Agents API.  They are skipped by default unless ``--run-integration`` is
-passed to pytest or the ``CURSOR_API_KEY`` environment variable is set.
+Agents API.  They are skipped by default unless the ``CURSOR_API_KEY``
+environment variable is set.
 
 Usage:
     CURSOR_API_KEY=... pixi run pytest tests/test_integration.py -v

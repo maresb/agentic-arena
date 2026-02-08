@@ -365,6 +365,7 @@ def step_verify(
     wait_for_followup(api, state.agent_ids[judge], prev_count)
 
     conversation = api.get_conversation(state.agent_ids[judge])
+    _update_token_usage(state, judge, conversation)
     verdict_text = extract_latest_response(conversation)
 
     verdict = parse_verdict(verdict_text)
@@ -431,7 +432,6 @@ def step_verify(
         state.critiques = {}
         state.verify_judge = None
         state.verify_prev_msg_count = None
-        state.verify_progress = ProgressStatus.PENDING
         state.verify_results = []
 
     state.verify_progress = ProgressStatus.DONE

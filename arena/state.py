@@ -71,7 +71,7 @@ class ArenaConfig(BaseModel, frozen=True):
     verify_commands: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=lambda: list(ModelName))
     branch_only: bool = False
-    verify_mode: str = "advisory"  # "advisory" or "gating"
+    verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
     context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
 
 
@@ -83,7 +83,7 @@ class ArenaState(BaseModel):
     """
 
     config: ArenaConfig
-    alias_mapping: dict[str, ModelName]
+    alias_mapping: dict[str, str]
     agent_ids: dict[str, str] = Field(default_factory=dict)
     round: int = 0
     phase: Phase = Phase.SOLVE
@@ -142,10 +142,18 @@ _EXTERNALIZABLE_LIST_FIELDS = ("verify_results",)
 
 
 def _resolve_file_ref(value: str, base_dir: str) -> str:
-    """If *value* is a ``file:`` reference, read and return the file content."""
+    """If *value* is a ``file:`` reference, read and return the file content.
+
+    Path traversal is prevented by ensuring the resolved path stays within
+    *base_dir*.
+    """
     if value.startswith(_FILE_REF_PREFIX):
         rel = value[len(_FILE_REF_PREFIX) :]
-        file_path = os.path.join(base_dir, rel)
+        file_path = os.path.normpath(os.path.join(base_dir, rel))
+        abs_base = os.path.normpath(base_dir)
+        if not file_path.startswith(abs_base + os.sep) and file_path != abs_base:
+            logger.warning("Path traversal blocked: %s", rel)
+            return ""
         if os.path.exists(file_path):
             with open(file_path) as f:
                 return f.read()
@@ -155,10 +163,20 @@ def _resolve_file_ref(value: str, base_dir: str) -> str:
 
 
 def _write_artifact(content: str, artifact_path: str) -> None:
-    """Write artifact content to disk."""
-    os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
-    with open(artifact_path, "w") as f:
-        f.write(content)
+    """Atomically write artifact content to disk (temp + rename)."""
+    parent = os.path.dirname(artifact_path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, artifact_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_state(path: str = "arena/state.json") -> ArenaState | None:
@@ -253,7 +271,12 @@ def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
 
 
 def _aliases_for_count(n: int) -> list[str]:
-    """Generate alias names for *n* agents: agent_a, agent_b, ..., agent_z."""
+    """Generate alias names for *n* agents: agent_a, agent_b, ..., agent_z.
+
+    Raises :class:`ValueError` if *n* exceeds 26 (a-z).
+    """
+    if n > 26:
+        raise ValueError(f"Maximum 26 agents supported, got {n}")
     return [f"agent_{chr(ord('a') + i)}" for i in range(n)]
 
 

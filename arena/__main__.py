@@ -19,12 +19,12 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
-from arena.orchestrator import (
+from arena.orchestrator import (  # noqa: E402
     DEFAULT_ARENA_DIR,
     generate_final_report,
     run_orchestrator,
     step_once,
-)  # noqa: E402
+)
 from arena.state import load_state, save_state, init_state  # noqa: E402
 
 app = typer.Typer(
@@ -94,7 +94,10 @@ def init(
     ] = False,
     verify_mode: Annotated[
         str,
-        typer.Option(help="Verify command mode: 'advisory' (default) or 'gating'"),
+        typer.Option(
+            help="Verify command mode: 'advisory' (default) or 'gating'",
+            case_sensitive=False,
+        ),
     ] = "advisory",
     arena_dir: Annotated[
         str, typer.Option(help="Directory for arena state and outputs")
@@ -102,7 +105,11 @@ def init(
 ) -> None:
     """Initialize a new arena run."""
     parsed_commands = verify_commands.split(",") if verify_commands else None
-    parsed_models = [m.strip() for m in models.split(",")] if models else None
+    parsed_models = (
+        [m.strip() for m in models.split(",") if m.strip()] if models else None
+    )
+    if models and not parsed_models:
+        raise typer.BadParameter("--models must contain at least one model name")
 
     state = init_state(
         task=task,
