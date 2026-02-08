@@ -39,7 +39,7 @@ def _branch_hint_block(branch_names: dict[str, str] | None) -> str:
 MODELS: dict[str, str] = {
     "opus": "claude-4.6-opus-high-thinking",
     "gpt": "gpt-5.2-codex-high",
-    "gemini": "gemini-3-pro",  # temporarily unavailable
+    "gemini": "gemini-3-pro",
 }
 
 # ---------------------------------------------------------------------------
