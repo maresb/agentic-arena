@@ -125,6 +125,12 @@ class ArenaState(BaseModel):
     # Token usage tracking: cumulative per-alias totals
     token_usage: dict[str, int] = Field(default_factory=dict)
 
+    # Verdict history: accumulates the judge's verdict text for every
+    # verify round (including CONTINUE rounds).  ``final_verdict`` is
+    # still set on terminal outcomes; this list preserves intermediate
+    # verdicts that would otherwise be lost.
+    verdict_history: list[str] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers
@@ -136,8 +142,8 @@ _FILE_REF_PREFIX = "file:"
 # Fields whose dict values are externalized to separate .md files.
 _EXTERNALIZABLE_DICT_FIELDS = ("solutions", "analyses", "critiques")
 
-# Fields whose list values are externalized (verify_results).
-_EXTERNALIZABLE_LIST_FIELDS = ("verify_results",)
+# Fields whose list values are externalized (verify_results, verdict_history).
+_EXTERNALIZABLE_LIST_FIELDS = ("verify_results", "verdict_history")
 
 
 def _resolve_file_ref(value: str, base_dir: str) -> str:

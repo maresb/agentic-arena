@@ -429,6 +429,58 @@ class TestStepVerify:
         assert state.verify_prev_msg_count is None
         assert state.verify_results == []
 
+    def test_verdict_text_persisted_on_continue(self) -> None:
+        """On CONTINUE, final_verdict is set so the judge's reasoning is preserved."""
+        state = self._make_revised_state()
+        verdict_content = (
+            "My analysis...\n"
+            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
+        )
+        verdict_response = [
+            {"role": "assistant", "content": verdict_content}
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.final_verdict is not None
+        assert "CONTINUE" in state.final_verdict
+
+    def test_verdict_history_accumulates(self) -> None:
+        """Each verify round appends to verdict_history."""
+        state = self._make_revised_state()
+        verdict_content = (
+            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
+        )
+        verdict_response = [
+            {"role": "assistant", "content": verdict_content}
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        assert state.verdict_history == []
+        step_verify(state, api)
+        assert len(state.verdict_history) == 1
+        assert "CONTINUE" in state.verdict_history[0]
+
+    def test_verdict_history_on_consensus(self) -> None:
+        """Consensus verdict is also appended to verdict_history."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert len(state.verdict_history) == 1
+        assert "CONSENSUS" in state.verdict_history[0]
+        assert state.final_verdict is not None
+
 
 class TestExtractWithRetry:
     def test_no_retry_when_tags_present(self) -> None:

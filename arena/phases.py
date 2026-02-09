@@ -415,6 +415,10 @@ def step_verify(
             verdict.decision = VerdictDecision.CONTINUE
 
     # ── Step 6: Determine next phase ──
+    # Always persist the verdict text so post-hoc analysis is possible,
+    # even on CONTINUE rounds where the arena loops back.
+    state.verdict_history.append(verdict_text)
+
     if verdict.decision == VerdictDecision.CONSENSUS:
         state.phase = Phase.DONE
         state.completed = True
@@ -428,6 +432,9 @@ def step_verify(
         state.final_verdict = verdict_text
         state.verify_progress = ProgressStatus.DONE
     else:
+        # Persist verdict text on CONTINUE so the judge's reasoning is
+        # not discarded (arena-run-summary2 issue #2).
+        state.final_verdict = verdict_text
         state.round += 1
         state.phase = Phase.EVALUATE
         state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
