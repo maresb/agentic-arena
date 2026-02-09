@@ -38,6 +38,14 @@ from arena.state import ArenaState, Phase, ProgressStatus, save_state
 logger = logging.getLogger("arena")
 
 
+def agent_label(alias: str, state: ArenaState) -> str:
+    """Return a human-readable label like ``agent_a (opus)`` for log messages."""
+    model = state.alias_mapping.get(alias)
+    if model:
+        return f"{alias} ({model})"
+    return alias
+
+
 def _update_token_usage(
     state: ArenaState, alias: str, conversation: list[dict]
 ) -> None:
@@ -112,7 +120,7 @@ def step_solve(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         if alias not in state.agent_ids:
-            logger.info("Launching agent %s (model=%s)", alias, model)
+            logger.info("Launching %s", agent_label(alias, state))
             agent = api.launch(
                 prompt=solve_prompt(state.config.task),
                 repo=state.config.repo,
@@ -153,9 +161,9 @@ def step_solve(
             )
             if branch:
                 state.branch_names[alias] = branch
-                logger.info("Agent %s branch: %s", alias, branch)
+                logger.info("%s branch: %s", agent_label(alias, state), branch)
         except Exception:
-            logger.warning("Failed to fetch branch name for %s", alias)
+            logger.warning("Failed to fetch branch name for %s", agent_label(alias, state))
     _save()
 
     # Extract content from all finished agents (with retry on missing tags)
@@ -212,14 +220,14 @@ def step_evaluate(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending evaluate follow-up to %s (crash recovery)", alias)
+            logger.info("Re-sending evaluate follow-up to %s (crash recovery)", agent_label(alias, state))
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
             _save()  # Persist count BEFORE sending to survive crash
-            logger.info("Sending evaluate follow-up to %s", alias)
+            logger.info("Sending evaluate follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -276,14 +284,14 @@ def step_revise(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending revise follow-up to %s (crash recovery)", alias)
+            logger.info("Re-sending revise follow-up to %s (crash recovery)", agent_label(alias, state))
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
             _save()  # Persist count BEFORE sending to survive crash
-            logger.info("Sending revise follow-up to %s", alias)
+            logger.info("Sending revise follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -353,7 +361,7 @@ def step_verify(
         _save()
 
     judge = state.verify_judge
-    logger.info("Judge for round %d: %s", state.round, judge)
+    logger.info("Judge for round %d: %s", state.round, agent_label(judge, state))
 
     # ── Step 2: Send verdict prompt (with crash-recovery re-send) ──
     need_send = False
@@ -369,14 +377,14 @@ def step_verify(
         saved_count = state.verify_prev_msg_count or 0
         if current_count <= saved_count:
             logger.info(
-                "Re-sending verify follow-up to judge %s (crash recovery)", judge
+                "Re-sending verify follow-up to judge %s (crash recovery)", agent_label(judge, state)
             )
             need_send = True
 
     if need_send:
         solutions = list(state.solutions.items())
         analyses = list(state.analyses.items())
-        logger.info("Sending verify follow-up to judge %s", judge)
+        logger.info("Sending verify follow-up to judge %s", agent_label(judge, state))
         api.followup(
             agent_id=state.agent_ids[judge],
             prompt=verify_prompt(
