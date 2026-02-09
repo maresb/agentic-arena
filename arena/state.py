@@ -291,25 +291,11 @@ def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
             )
         return _resolve_state_from_dict(data, base_dir)
     else:
-        state = ArenaState.model_validate_json(raw)
-
-        # Resolve dict fields (solutions, analyses, critiques)
-        for field_name in _EXTERNALIZABLE_DICT_FIELDS:
-            d2: dict[str, str] = getattr(state, field_name)
-            for key, value in d2.items():
-                d2[key] = _resolve_file_ref(value, base_dir)
-
-        # Resolve list fields (verify_results, verdict_history)
-        for field_name in _EXTERNALIZABLE_LIST_FIELDS:
-            lst2: list[str] = getattr(state, field_name)
-            for i, value in enumerate(lst2):
-                lst2[i] = _resolve_file_ref(value, base_dir)
-
-        # Resolve final_verdict
-        if state.final_verdict:
-            state.final_verdict = _resolve_file_ref(state.final_verdict, base_dir)
-
-        return state
+        # Legacy JSON format: parse into a dict and reuse the shared
+        # resolution logic so that adding new externalizable fields only
+        # needs updating in one place.
+        data = json.loads(raw)
+        return _resolve_state_from_dict(data, base_dir)
 
 
 def save_state(state: ArenaState, path: str = "arena/state.yaml") -> None:
