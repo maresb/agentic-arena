@@ -58,9 +58,6 @@ def _make_api() -> CursorCloudAPI:
     return CursorCloudAPI(api_key)
 
 
-_PHASE_NUMBER = {"solve": 1, "evaluate": 2, "revise": 3, "verify": 4}
-
-
 def _content_uid(content: str) -> str:
     """Return a short deterministic UID from content (first 6 hex chars of SHA-256)."""
     return hashlib.sha256(content.encode()).hexdigest()[:6]
@@ -79,14 +76,18 @@ def _archive_artifact(arena_dir: str, name: str, content: str) -> None:
 def _archive_round(state: ArenaState, arena_dir: str) -> None:
     """Archive the current round's outputs using deterministic naming.
 
-    Naming scheme: ``{round:02d}-{phase:02d}-{phase_name}-{letter}-{model}-{uid}.md``
-    where *uid* is derived from content (SHA-256 prefix) for deduplication.
+    Naming scheme: ``{round:02d}-{phase_name}-{model}-{artifact_type}-{uid}.md``
+
+    Uses phase names (solve, evaluate, revise, verify) instead of
+    misleading phase numbers, and model names instead of agent letters
+    for human readability.
+
+    *uid* is derived from content (SHA-256 prefix) for deduplication.
     Files already present on disk are not overwritten.
     """
     rnd = state.round
 
     for alias in state.alias_mapping:
-        letter = sanitize_filename_component(alias.split("_")[1])  # "agent_a" → "a"
         model = sanitize_filename_component(
             str(state.alias_mapping.get(alias, "unknown"))
         )
@@ -94,33 +95,28 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
         solution = state.solutions.get(alias)
         if solution:
             uid = _content_uid(solution)
-            name = f"{rnd:02d}-{_PHASE_NUMBER['solve']:02d}-solve-{letter}-{model}-{uid}.md"
+            name = f"{rnd:02d}-solve-{model}-solution-{uid}.md"
             _archive_artifact(arena_dir, name, solution)
 
         analysis = state.analyses.get(alias)
         if analysis:
             uid = _content_uid(analysis)
-            name = f"{rnd:02d}-{_PHASE_NUMBER['solve']:02d}-analysis-{letter}-{model}-{uid}.md"
+            name = f"{rnd:02d}-solve-{model}-analysis-{uid}.md"
             _archive_artifact(arena_dir, name, analysis)
 
         critique = state.critiques.get(alias)
         if critique:
-            phase_num = _PHASE_NUMBER["evaluate"]
             uid = _content_uid(critique)
-            name = f"{rnd:02d}-{phase_num:02d}-critique-{letter}-{model}-{uid}.md"
+            name = f"{rnd:02d}-evaluate-{model}-critique-{uid}.md"
             _archive_artifact(arena_dir, name, critique)
 
     # Archive verdict if present
     if state.final_verdict and state.phase == Phase.DONE:
-        judge_letter = sanitize_filename_component(
-            state.judge_history[-1].split("_")[1]
-        )
         judge_model = sanitize_filename_component(
             str(state.alias_mapping.get(state.judge_history[-1], "unknown"))
         )
         uid = _content_uid(state.final_verdict)
-        phase_num = _PHASE_NUMBER["verify"]
-        name = f"{rnd:02d}-{phase_num:02d}-verify-{judge_letter}-{judge_model}-{uid}.md"
+        name = f"{rnd:02d}-verify-{judge_model}-verdict-{uid}.md"
         _archive_artifact(arena_dir, name, state.final_verdict)
 
 
