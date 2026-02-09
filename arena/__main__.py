@@ -121,7 +121,7 @@ def init(
         branch_only=branch_only,
         verify_mode=verify_mode,
     )
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     save_state(state, state_path)
 
     alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
@@ -159,7 +159,7 @@ def step(
     """Execute a single phase transition (one FSM step)."""
     _setup_logging(arena_dir, verbose=verbose)
 
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     before = load_state(state_path)
     if before is None:
         typer.echo(f"No arena state found at {state_path}")
@@ -189,7 +189,7 @@ def status(
     ] = DEFAULT_ARENA_DIR,
 ) -> None:
     """Show the current state of the arena."""
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     state = load_state(state_path)
     if state is None:
         typer.echo(f"No arena state found at {state_path}")

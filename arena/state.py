@@ -1,6 +1,9 @@
 """State management for the arena orchestrator.
 
-All arena state lives in a single JSON file backed by Pydantic models.
+All arena state lives in a YAML file (``state.yaml``) backed by Pydantic
+models.  JSON files (``state.json``) are still loaded for backward
+compatibility but new saves always write YAML.
+
 The orchestrator is stateless: it reads the state file, performs one step,
 writes the updated state, and can be killed and restarted at any point
 without losing progress.
@@ -15,9 +18,11 @@ import random
 import re
 import tempfile
 from enum import StrEnum
+from io import StringIO
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+from ruamel.yaml import YAML
 
 logger = logging.getLogger("arena")
 
@@ -210,20 +215,17 @@ def sanitize_filename_component(name: str) -> str:
     return sanitized or "_"
 
 
-def load_state(path: str = "arena/state.json") -> ArenaState | None:
-    """Load arena state from disk. Returns ``None`` if the file does not exist.
+def _yaml_instance() -> YAML:
+    """Create a configured YAML instance for state serialization."""
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.width = 120  # Wider lines for readability
+    return yaml
 
-    Transparently resolves ``file:`` references back to inline text so
-    that phase functions always see plain strings.  Handles both the old
-    inline format and the new externalized format (migration shim).
-    """
-    if not os.path.exists(path):
-        return None
-    with open(path) as f:
-        raw = f.read()
-    state = ArenaState.model_validate_json(raw)
 
-    base_dir = os.path.dirname(path) or "."
+def _resolve_state_from_dict(data: dict, base_dir: str) -> ArenaState:
+    """Build an ArenaState from a parsed dict and resolve file refs."""
+    state = ArenaState.model_validate(data)
 
     # Resolve dict fields (solutions, analyses, critiques)
     for field_name in _EXTERNALIZABLE_DICT_FIELDS:
@@ -231,7 +233,7 @@ def load_state(path: str = "arena/state.json") -> ArenaState | None:
         for key, value in d.items():
             d[key] = _resolve_file_ref(value, base_dir)
 
-    # Resolve list fields (verify_results)
+    # Resolve list fields (verify_results, verdict_history)
     for field_name in _EXTERNALIZABLE_LIST_FIELDS:
         lst: list[str] = getattr(state, field_name)
         for i, value in enumerate(lst):
@@ -244,18 +246,83 @@ def load_state(path: str = "arena/state.json") -> ArenaState | None:
     return state
 
 
-def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
+def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
+    """Load arena state from disk. Returns ``None`` if the file does not exist.
+
+    Supports both YAML (``state.yaml``) and legacy JSON (``state.json``)
+    files.  If the given *path* does not exist, falls back to checking
+    the alternate extension (YAML ↔ JSON) in the same directory.
+
+    Transparently resolves ``file:`` references back to inline text so
+    that phase functions always see plain strings.  Handles both the old
+    inline format and the new externalized format (migration shim).
+    """
+    # Try the requested path first, then the alternate extension
+    candidates = [path]
+    base, ext = os.path.splitext(path)
+    if ext == ".yaml":
+        candidates.append(base + ".json")
+    elif ext == ".json":
+        candidates.insert(0, base + ".yaml")  # prefer YAML
+        candidates.append(path)  # already in list but order matters
+
+    actual_path: str | None = None
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            actual_path = candidate
+            break
+    if actual_path is None:
+        return None
+
+    base_dir = os.path.dirname(actual_path) or "."
+
+    with open(actual_path) as f:
+        raw = f.read()
+
+    # Detect format by extension or content
+    if actual_path.endswith(".yaml") or actual_path.endswith(".yml"):
+        yaml = _yaml_instance()
+        data = yaml.load(raw)
+        return _resolve_state_from_dict(data, base_dir)
+    else:
+        state = ArenaState.model_validate_json(raw)
+
+        # Resolve dict fields (solutions, analyses, critiques)
+        for field_name in _EXTERNALIZABLE_DICT_FIELDS:
+            d2: dict[str, str] = getattr(state, field_name)
+            for key, value in d2.items():
+                d2[key] = _resolve_file_ref(value, base_dir)
+
+        # Resolve list fields (verify_results, verdict_history)
+        for field_name in _EXTERNALIZABLE_LIST_FIELDS:
+            lst2: list[str] = getattr(state, field_name)
+            for i, value in enumerate(lst2):
+                lst2[i] = _resolve_file_ref(value, base_dir)
+
+        # Resolve final_verdict
+        if state.final_verdict:
+            state.final_verdict = _resolve_file_ref(state.final_verdict, base_dir)
+
+        return state
+
+
+def save_state(state: ArenaState, path: str = "arena/state.yaml") -> None:
     """Atomic write: write to temp file then rename to prevent corruption.
 
     Large text fields are externalized to separate ``.md`` files under an
-    ``artifacts/`` subdirectory.  The JSON stores ``file:`` references
+    ``artifacts/`` subdirectory.  The state file stores ``file:`` references
     instead of inline text.
+
+    Saves as YAML for human readability.  If *path* ends with ``.json``,
+    falls back to JSON output for backward compatibility.
     """
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
 
-    # Build a shallow copy with file references replacing large text
-    dump = state.model_dump()
+    # Build a shallow copy with file references replacing large text.
+    # mode="json" ensures StrEnum values are serialized as plain strings
+    # (required for ruamel.yaml which can't represent StrEnum directly).
+    dump = state.model_dump(mode="json")
 
     # Externalize dict fields
     for field_name in _EXTERNALIZABLE_DICT_FIELDS:
@@ -282,12 +349,19 @@ def save_state(state: ArenaState, path: str = "arena/state.json") -> None:
         _write_artifact(dump["final_verdict"], os.path.join(parent, rel))
         dump["final_verdict"] = f"{_FILE_REF_PREFIX}{rel}"
 
-    json_str = json.dumps(dump, indent=2)
+    # Serialize
+    if path.endswith(".json"):
+        serialized = json.dumps(dump, indent=2)
+    else:
+        yaml = _yaml_instance()
+        stream = StringIO()
+        yaml.dump(dump, stream)
+        serialized = stream.getvalue()
 
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(json_str)
+            f.write(serialized)
         os.replace(tmp_path, path)
     except BaseException:
         try:

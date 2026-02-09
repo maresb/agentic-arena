@@ -146,7 +146,7 @@ def _extract_with_retry(
 
 
 def step_solve(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Launch agents to solve the task independently in parallel."""
     _save = _saver(state, state_path)
@@ -231,7 +231,7 @@ def step_solve(
 
 
 def step_evaluate(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Each agent critiques the other two solutions without revising its own."""
     _save = _saver(state, state_path)
@@ -306,7 +306,7 @@ def step_evaluate(
 
 
 def step_revise(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Each agent revises its solution based on all three critiques."""
     _save = _saver(state, state_path)
@@ -380,7 +380,7 @@ def step_revise(
 
 
 def step_verify(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """A rotating judge evaluates all revised solutions for consensus.
 

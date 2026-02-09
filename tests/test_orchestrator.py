@@ -172,7 +172,7 @@ class TestStepOnce:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
             state.completed = True
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             import pytest
 
@@ -183,7 +183,7 @@ class TestStepOnce:
         """step_once should invoke the solve handler and save state."""
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             mock_api = MagicMock()
             ids = iter(["id-1", "id-2", "id-3"])

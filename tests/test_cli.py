@@ -28,7 +28,7 @@ class TestInitCommand:
             )
             assert result.exit_code == 0
 
-            state_path = os.path.join(tmpdir, "state.json")
+            state_path = os.path.join(tmpdir, "state.yaml")
             assert os.path.exists(state_path)
 
             state = load_state(state_path)
@@ -57,7 +57,7 @@ class TestInitCommand:
             )
             assert result.exit_code == 0
 
-            state = load_state(os.path.join(tmpdir, "state.json"))
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert state.config.base_branch == "develop"
             assert state.config.max_rounds == 5
@@ -80,7 +80,7 @@ class TestInitCommand:
             )
             assert result.exit_code == 0
 
-            state = load_state(os.path.join(tmpdir, "state.json"))
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert state.config.verify_commands == [
                 "pixi run pytest",
@@ -124,7 +124,7 @@ class TestInitModelsFlag:
                 ],
             )
             assert result.exit_code == 0
-            state = load_state(os.path.join(tmpdir, "state.json"))
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert len(state.alias_mapping) == 2
 
@@ -144,7 +144,7 @@ class TestInitModelsFlag:
                 ],
             )
             assert result.exit_code == 0
-            state = load_state(os.path.join(tmpdir, "state.json"))
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert state.config.branch_only is True
 
@@ -165,7 +165,7 @@ class TestInitModelsFlag:
                 ],
             )
             assert result.exit_code == 0
-            state = load_state(os.path.join(tmpdir, "state.json"))
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert state.config.verify_mode == "gating"
 
@@ -181,7 +181,7 @@ class TestStepCommand:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
             state.completed = True
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             result = runner.invoke(app, ["step", "--arena-dir", tmpdir])
             assert result.exit_code == 0
@@ -192,7 +192,7 @@ class TestStatusCommand:
     def test_shows_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
             assert result.exit_code == 0

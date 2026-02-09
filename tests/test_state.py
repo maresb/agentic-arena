@@ -184,7 +184,7 @@ class TestSaveAndLoad:
         """States saved with inline text (old format) still load correctly."""
         state = init_state(task="test", repo="r")
         # Simulate old-format JSON with inline text (no file: prefix)
-        dump = state.model_dump()
+        dump = state.model_dump(mode="json")
         dump["solutions"] = {"agent_a": "inline solution"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "state.json")
@@ -193,6 +193,35 @@ class TestSaveAndLoad:
             loaded = load_state(path)
             assert loaded is not None
             assert loaded.solutions["agent_a"] == "inline solution"
+
+    def test_yaml_round_trip(self) -> None:
+        """State can be saved as YAML and loaded back correctly."""
+        state = init_state(task="YAML test", repo="owner/repo")
+        state.solutions = {"agent_a": "sol A"}
+        state.final_verdict = "All good"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.yaml")
+            save_state(state, path)
+            assert os.path.exists(path)
+            # Verify it's valid YAML, not JSON
+            with open(path) as f:
+                content = f.read()
+            assert not content.strip().startswith("{")  # Not JSON
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.config.task == "YAML test"
+            assert loaded == state
+
+    def test_yaml_fallback_to_json(self) -> None:
+        """load_state with .yaml path falls back to .json if YAML doesn't exist."""
+        state = init_state(task="fallback test", repo="r")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = os.path.join(tmpdir, "state.json")
+            save_state(state, json_path)
+            yaml_path = os.path.join(tmpdir, "state.yaml")
+            loaded = load_state(yaml_path)
+            assert loaded is not None
+            assert loaded.config.task == "fallback test"
 
 
 class TestCustomModels:

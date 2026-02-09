@@ -260,7 +260,7 @@ def step_once(arena_dir: str = DEFAULT_ARENA_DIR) -> ArenaState:
     ValueError
         If the current phase has no handler (e.g. ``done``).
     """
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     state = load_state(state_path)
     if state is None:
         raise FileNotFoundError(
