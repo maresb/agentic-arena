@@ -80,7 +80,7 @@ class ArenaConfig(BaseModel, frozen=True):
 
 
 class ArenaState(BaseModel):
-    """Full arena state, persisted to disk as JSON.
+    """Full arena state, persisted to disk as YAML (with JSON backward compat).
 
     Mutable — phase functions update fields in place and call
     :func:`save_state` after every meaningful step.
