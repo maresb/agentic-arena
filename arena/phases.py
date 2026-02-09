@@ -19,6 +19,7 @@ from arena.api import (
 )
 from arena.extraction import (
     RETRY_PROMPT,
+    VERDICT_RETRY_PROMPT,
     VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
@@ -392,6 +393,31 @@ def step_verify(
     verdict_text = extract_latest_response(conversation)
 
     verdict = parse_verdict(verdict_text)
+
+    # If the verdict was extracted via keyword fallback (no <verdict> tag
+    # and no convergence_score), re-prompt the judge once for proper
+    # formatting.  This improves reliability without changing the outcome
+    # when the re-prompt succeeds.
+    if verdict.convergence_score is None and extract_xml_section(verdict_text, "verdict") is None:
+        logger.warning(
+            "Verdict extracted via keyword fallback; re-prompting judge for "
+            "structured <verdict> block"
+        )
+        retry_prev = len(conversation)
+        api.followup(agent_id=state.agent_ids[judge], prompt=VERDICT_RETRY_PROMPT)
+        wait_for_followup(api, state.agent_ids[judge], retry_prev)
+        conversation = api.get_conversation(state.agent_ids[judge])
+        _update_token_usage(state, judge, conversation)
+        retry_text = extract_latest_response(conversation)
+        retry_verdict = parse_verdict(retry_text)
+        # Use the retry result if it has a proper XML verdict
+        if extract_xml_section(retry_text, "verdict") is not None:
+            verdict = retry_verdict
+            verdict_text = retry_text
+            logger.info("Verdict re-prompt succeeded with structured XML")
+        else:
+            logger.warning("Verdict re-prompt still lacks <verdict> tag; using original")
+
     logger.info("Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score)
 
     # ── Step 4: Enforce convergence_score >= 8 for consensus ──

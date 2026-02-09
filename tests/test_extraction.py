@@ -4,8 +4,10 @@ import pytest
 
 from arena.extraction import (
     RETRY_PROMPT,
+    VERDICT_RETRY_PROMPT,
     Verdict,
     VerdictDecision,
+    _keyword_fallback,
     extract_latest_response,
     extract_solution_and_analysis,
     extract_xml_section,
@@ -182,6 +184,28 @@ class TestParseVerdict:
         assert verdict.decision == VerdictDecision.CONTINUE
         assert verdict.convergence_score is None
 
+    def test_fallback_decision_pattern_consensus(self) -> None:
+        """'decision: CONSENSUS' pattern is preferred over bare keywords."""
+        text = "Let me CONTINUE my analysis. decision: CONSENSUS"
+        verdict = parse_verdict(text)
+        assert verdict.decision == VerdictDecision.CONSENSUS
+
+    def test_fallback_decision_pattern_continue(self) -> None:
+        text = "We reached near-CONSENSUS but decision: CONTINUE"
+        verdict = parse_verdict(text)
+        assert verdict.decision == VerdictDecision.CONTINUE
+
+    def test_fallback_both_keywords_prefers_last(self) -> None:
+        """When both keywords appear, last occurrence wins."""
+        text = "We initially said CONTINUE but after further review CONSENSUS"
+        verdict = parse_verdict(text)
+        assert verdict.decision == VerdictDecision.CONSENSUS
+
+    def test_fallback_both_keywords_last_is_continue(self) -> None:
+        text = "Near CONSENSUS but ultimately must CONTINUE"
+        verdict = parse_verdict(text)
+        assert verdict.decision == VerdictDecision.CONTINUE
+
     def test_malformed_score_ignored(self) -> None:
         text = "<verdict>\ndecision: CONSENSUS\nconvergence_score: high\n</verdict>"
         verdict = parse_verdict(text)
@@ -240,6 +264,34 @@ class TestRealApiFormatExtraction:
         assert extract_latest_response(conversation) == "second"
 
 
+class TestKeywordFallback:
+    def test_decision_pattern_takes_priority(self) -> None:
+        text = "CONTINUE discussion. decision: CONSENSUS is my call."
+        verdict = _keyword_fallback(text)
+        assert verdict.decision == VerdictDecision.CONSENSUS
+
+    def test_bare_keyword_last_wins(self) -> None:
+        text = "CONSENSUS initially, then changed to CONTINUE"
+        verdict = _keyword_fallback(text)
+        assert verdict.decision == VerdictDecision.CONTINUE
+
+    def test_no_keywords_returns_default(self) -> None:
+        text = "I have analyzed all solutions."
+        verdict = _keyword_fallback(text)
+        assert verdict.decision == VerdictDecision.CONTINUE
+
+    def test_case_insensitive_decision_pattern(self) -> None:
+        text = "Decision: consensus"
+        verdict = _keyword_fallback(text)
+        assert verdict.decision == VerdictDecision.CONSENSUS
+
+
 def test_retry_prompt_is_defined() -> None:
     assert "<solution>" in RETRY_PROMPT
     assert "<analysis>" in RETRY_PROMPT
+
+
+def test_verdict_retry_prompt_is_defined() -> None:
+    assert "<verdict>" in VERDICT_RETRY_PROMPT
+    assert "CONSENSUS" in VERDICT_RETRY_PROMPT
+    assert "CONTINUE" in VERDICT_RETRY_PROMPT
