@@ -277,17 +277,22 @@ def wait_for_followup(
             # still RUNNING the message text may be incomplete (the race
             # condition that caused arena-run-2's verdict to be lost).
             info = api.status(agent_id)
-            if info["status"] == "FINISHED":
+            status = info["status"]
+            if status == "FINISHED":
                 return "FINISHED"
-            # Agent still running — message may be partial, keep polling.
-            logger.debug(
-                "Agent %s has new message but status=%s; waiting for FINISHED",
-                agent_id,
-                info["status"],
-            )
-            _emit_poll_dot()
-            time.sleep(poll_interval)
-            continue
+            if status in ("RUNNING", "CREATING"):
+                # Agent still running — message may be partial, keep polling.
+                logger.debug(
+                    "Agent %s has new message but status=%s; waiting for FINISHED",
+                    agent_id,
+                    status,
+                )
+                _emit_poll_dot()
+                time.sleep(poll_interval)
+                continue
+            # Unexpected terminal/error state — fail fast instead of
+            # polling to timeout.
+            raise RuntimeError(f"Agent {agent_id} in unexpected state: {status}")
 
         # Secondary signal: agent status (for error detection + grace)
         info = api.status(agent_id)
@@ -349,15 +354,21 @@ def wait_for_all_followups(
                 # Guard against truncated streaming responses: confirm
                 # the agent is FINISHED before accepting the message.
                 info = api.status(agent_id)
-                if info["status"] == "FINISHED":
+                status = info["status"]
+                if status == "FINISHED":
                     remaining.pop(alias)
                     grace_deadlines.pop(alias, None)
                     logger.info("Agent %s (%s) responded", alias, agent_id)
-                else:
+                elif status in ("RUNNING", "CREATING"):
                     logger.debug(
                         "Agent %s has new message but status=%s; waiting for FINISHED",
                         alias,
-                        info["status"],
+                        status,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Agent {alias} ({agent_id}) has new message but is in "
+                        f"unexpected state: {status}"
                     )
                 continue
 
