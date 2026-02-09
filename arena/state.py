@@ -141,7 +141,7 @@ class ArenaState(BaseModel):
     agent_timing: dict[str, dict[str, dict[str, float]]] = Field(default_factory=dict)
 
     # Per-agent metadata from the API status response (summary, linesAdded,
-    # filesChanged).  Captured after each phase completes.
+    # filesChanged).  Captured after the solve and revise phases complete.
     agent_metadata: dict[str, dict[str, str | int]] = Field(default_factory=dict)
 
 
@@ -264,7 +264,6 @@ def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
         candidates.append(base + ".json")
     elif ext == ".json":
         candidates.insert(0, base + ".yaml")  # prefer YAML
-        candidates.append(path)  # already in list but order matters
 
     actual_path: str | None = None
     for candidate in candidates:
@@ -283,6 +282,13 @@ def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
     if actual_path.endswith(".yaml") or actual_path.endswith(".yml"):
         yaml = _yaml_instance()
         data = yaml.load(raw)
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"State file {actual_path} is malformed: expected a YAML mapping "
+                f"at the top level but got {type(data).__name__!r}."
+            )
         return _resolve_state_from_dict(data, base_dir)
     else:
         state = ArenaState.model_validate_json(raw)
