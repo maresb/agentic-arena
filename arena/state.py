@@ -1,8 +1,9 @@
 """State management for the arena orchestrator.
 
-All arena state lives in a YAML file (``state.yaml``) backed by Pydantic
-models.  JSON files (``state.json``) are still loaded for backward
-compatibility but new saves always write YAML.
+All arena state is stored in a YAML file by default (``state.yaml``) backed
+by Pydantic models.  JSON files (``state.json``) are still loaded for
+backward compatibility, and ``save_state`` will also write JSON when given
+a path ending in ``.json``.
 
 The orchestrator is stateless: it reads the state file, performs one step,
 writes the updated state, and can be killed and restarted at any point
