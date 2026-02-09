@@ -355,8 +355,7 @@ def wait_for_all_followups(
                     logger.info("Agent %s (%s) responded", alias, agent_id)
                 else:
                     logger.debug(
-                        "Agent %s has new message but status=%s; "
-                        "waiting for FINISHED",
+                        "Agent %s has new message but status=%s; waiting for FINISHED",
                         alias,
                         info["status"],
                     )

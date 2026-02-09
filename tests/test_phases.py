@@ -122,7 +122,6 @@ class TestStepSolve:
         api = make_mock_api()
 
         # Make launch return unique IDs
-        agent_ids = {}
         call_count = {"n": 0}
 
         def mock_launch(**kw):
@@ -473,9 +472,7 @@ class TestStepVerify:
             "My analysis...\n"
             "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
         )
-        verdict_response = [
-            {"role": "assistant", "content": verdict_content}
-        ]
+        verdict_response = [{"role": "assistant", "content": verdict_content}]
         api = make_mock_api(conversation_response=verdict_response)
 
         step_verify(state, api)
@@ -489,9 +486,7 @@ class TestStepVerify:
         verdict_content = (
             "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
         )
-        verdict_response = [
-            {"role": "assistant", "content": verdict_content}
-        ]
+        verdict_response = [{"role": "assistant", "content": verdict_content}]
         api = make_mock_api(conversation_response=verdict_response)
 
         assert state.verdict_history == []

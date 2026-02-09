@@ -139,10 +139,14 @@ def _keyword_fallback(text: str) -> Verdict:
 
     if last_consensus >= 0 or last_continue >= 0:
         if last_consensus > last_continue:
-            logger.info("Keyword fallback: last keyword is CONSENSUS (pos %d)", last_consensus)
+            logger.info(
+                "Keyword fallback: last keyword is CONSENSUS (pos %d)", last_consensus
+            )
             return Verdict(decision=VerdictDecision.CONSENSUS)
         if last_continue > last_consensus:
-            logger.info("Keyword fallback: last keyword is CONTINUE (pos %d)", last_continue)
+            logger.info(
+                "Keyword fallback: last keyword is CONTINUE (pos %d)", last_continue
+            )
             return Verdict(decision=VerdictDecision.CONTINUE)
 
     logger.warning("Keyword fallback: no CONSENSUS or CONTINUE keyword found")

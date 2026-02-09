@@ -63,9 +63,7 @@ def _record_timing_end(state: ArenaState, alias: str, phase_name: str) -> None:
     state.agent_timing[alias][phase_name] = entry
 
 
-def _capture_agent_metadata(
-    state: ArenaState, alias: str, api: CursorCloudAPI
-) -> None:
+def _capture_agent_metadata(state: ArenaState, alias: str, api: CursorCloudAPI) -> None:
     """Capture metadata (summary, linesAdded, filesChanged) from status()."""
     agent_id = state.agent_ids.get(alias)
     if not agent_id:
@@ -192,15 +190,16 @@ def step_solve(
             continue
         try:
             info = api.status(agent_id)
-            branch = (
-                info.get("target", {}).get("branchName")
-                or info.get("target", {}).get("branch_name")
-            )
+            branch = info.get("target", {}).get("branchName") or info.get(
+                "target", {}
+            ).get("branch_name")
             if branch:
                 state.branch_names[alias] = branch
                 logger.info("%s branch: %s", agent_label(alias, state), branch)
         except Exception:
-            logger.warning("Failed to fetch branch name for %s", agent_label(alias, state))
+            logger.warning(
+                "Failed to fetch branch name for %s", agent_label(alias, state)
+            )
     _save()
 
     # Extract content from all finished agents (with retry on missing tags)
@@ -259,7 +258,10 @@ def step_evaluate(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending evaluate follow-up to %s (crash recovery)", agent_label(alias, state))
+            logger.info(
+                "Re-sending evaluate follow-up to %s (crash recovery)",
+                agent_label(alias, state),
+            )
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
@@ -325,7 +327,10 @@ def step_revise(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending revise follow-up to %s (crash recovery)", agent_label(alias, state))
+            logger.info(
+                "Re-sending revise follow-up to %s (crash recovery)",
+                agent_label(alias, state),
+            )
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
@@ -421,7 +426,8 @@ def step_verify(
         saved_count = state.verify_prev_msg_count or 0
         if current_count <= saved_count:
             logger.info(
-                "Re-sending verify follow-up to judge %s (crash recovery)", agent_label(judge, state)
+                "Re-sending verify follow-up to judge %s (crash recovery)",
+                agent_label(judge, state),
             )
             need_send = True
 
@@ -450,7 +456,10 @@ def step_verify(
     # and no convergence_score), re-prompt the judge once for proper
     # formatting.  This improves reliability without changing the outcome
     # when the re-prompt succeeds.
-    if verdict.convergence_score is None and extract_xml_section(verdict_text, "verdict") is None:
+    if (
+        verdict.convergence_score is None
+        and extract_xml_section(verdict_text, "verdict") is None
+    ):
         logger.warning(
             "Verdict extracted via keyword fallback; re-prompting judge for "
             "structured <verdict> block"
@@ -468,7 +477,9 @@ def step_verify(
             verdict_text = retry_text
             logger.info("Verdict re-prompt succeeded with structured XML")
         else:
-            logger.warning("Verdict re-prompt still lacks <verdict> tag; using original")
+            logger.warning(
+                "Verdict re-prompt still lacks <verdict> tag; using original"
+            )
 
     logger.info("Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score)
 
