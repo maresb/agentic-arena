@@ -272,7 +272,22 @@ def wait_for_followup(
         # Primary signal: new assistant message
         messages = api.get_conversation(agent_id)
         if len(messages) > previous_msg_count and is_assistant_message(messages[-1]):
-            return "FINISHED"
+            # Guard against truncated streaming responses: only return
+            # when the agent has actually finished processing.  If it is
+            # still RUNNING the message text may be incomplete (the race
+            # condition that caused arena-run-2's verdict to be lost).
+            info = api.status(agent_id)
+            if info["status"] == "FINISHED":
+                return "FINISHED"
+            # Agent still running — message may be partial, keep polling.
+            logger.debug(
+                "Agent %s has new message but status=%s; waiting for FINISHED",
+                agent_id,
+                info["status"],
+            )
+            _emit_poll_dot()
+            time.sleep(poll_interval)
+            continue
 
         # Secondary signal: agent status (for error detection + grace)
         info = api.status(agent_id)
@@ -331,9 +346,20 @@ def wait_for_all_followups(
         for alias, (agent_id, prev_count) in list(remaining.items()):
             messages = api.get_conversation(agent_id)
             if len(messages) > prev_count and is_assistant_message(messages[-1]):
-                remaining.pop(alias)
-                grace_deadlines.pop(alias, None)
-                logger.info("Agent %s (%s) responded", alias, agent_id)
+                # Guard against truncated streaming responses: confirm
+                # the agent is FINISHED before accepting the message.
+                info = api.status(agent_id)
+                if info["status"] == "FINISHED":
+                    remaining.pop(alias)
+                    grace_deadlines.pop(alias, None)
+                    logger.info("Agent %s (%s) responded", alias, agent_id)
+                else:
+                    logger.debug(
+                        "Agent %s has new message but status=%s; "
+                        "waiting for FINISHED",
+                        alias,
+                        info["status"],
+                    )
                 continue
 
             info = api.status(agent_id)
