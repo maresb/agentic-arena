@@ -205,6 +205,29 @@ def status(
     progress_display = {k: str(v) for k, v in state.phase_progress.items()}
     typer.echo(f"Phase progress: {progress_display}")
 
+    if state.branch_names:
+        typer.echo(f"Branch names: {state.branch_names}")
+
+    if state.agent_timing:
+        typer.echo("Agent timing:")
+        for alias, phases in sorted(state.agent_timing.items()):
+            model = state.alias_mapping.get(alias, "unknown")
+            for phase_name, times in sorted(phases.items()):
+                start = times.get("start")
+                end = times.get("end")
+                if start and end:
+                    duration = end - start
+                    typer.echo(f"  {alias} ({model}) {phase_name}: {duration:.1f}s")
+                elif start:
+                    typer.echo(f"  {alias} ({model}) {phase_name}: in progress")
+
+    if state.agent_metadata:
+        typer.echo("Agent metadata:")
+        for alias, meta in sorted(state.agent_metadata.items()):
+            model = state.alias_mapping.get(alias, "unknown")
+            parts = [f"{k}={v}" for k, v in meta.items()]
+            typer.echo(f"  {alias} ({model}): {', '.join(parts)}")
+
     if state.consensus_reached is not None:
         typer.echo(f"Consensus: {state.consensus_reached}")
 

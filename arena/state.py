@@ -131,6 +131,14 @@ class ArenaState(BaseModel):
     # verdicts that would otherwise be lost.
     verdict_history: list[str] = Field(default_factory=list)
 
+    # Per-agent timing: maps alias → {phase_name: {start: float, end: float}}.
+    # Recorded as epoch timestamps from time.time().
+    agent_timing: dict[str, dict[str, dict[str, float]]] = Field(default_factory=dict)
+
+    # Per-agent metadata from the API status response (summary, linesAdded,
+    # filesChanged).  Captured after each phase completes.
+    agent_metadata: dict[str, dict[str, str | int]] = Field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Persistence helpers

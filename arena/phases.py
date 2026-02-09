@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from collections.abc import Callable
 
 from arena.api import (
@@ -44,6 +45,41 @@ def agent_label(alias: str, state: ArenaState) -> str:
     if model:
         return f"{alias} ({model})"
     return alias
+
+
+def _record_timing_start(state: ArenaState, alias: str, phase_name: str) -> None:
+    """Record the start time for an agent's phase."""
+    if alias not in state.agent_timing:
+        state.agent_timing[alias] = {}
+    state.agent_timing[alias][phase_name] = {"start": time.time()}
+
+
+def _record_timing_end(state: ArenaState, alias: str, phase_name: str) -> None:
+    """Record the end time for an agent's phase."""
+    if alias not in state.agent_timing:
+        state.agent_timing[alias] = {}
+    entry = state.agent_timing[alias].get(phase_name, {})
+    entry["end"] = time.time()
+    state.agent_timing[alias][phase_name] = entry
+
+
+def _capture_agent_metadata(
+    state: ArenaState, alias: str, api: CursorCloudAPI
+) -> None:
+    """Capture metadata (summary, linesAdded, filesChanged) from status()."""
+    agent_id = state.agent_ids.get(alias)
+    if not agent_id:
+        return
+    try:
+        info = api.status(agent_id)
+        meta: dict[str, str | int] = {}
+        for key in ("summary", "linesAdded", "filesChanged"):
+            if key in info:
+                meta[key] = info[key]
+        if meta:
+            state.agent_metadata[alias] = meta
+    except Exception:
+        logger.debug("Failed to capture metadata for %s", alias)
 
 
 def _update_token_usage(
@@ -121,6 +157,7 @@ def step_solve(
             continue
         if alias not in state.agent_ids:
             logger.info("Launching %s", agent_label(alias, state))
+            _record_timing_start(state, alias, "solve")
             agent = api.launch(
                 prompt=solve_prompt(state.config.task),
                 repo=state.config.repo,
@@ -178,6 +215,8 @@ def step_solve(
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "solve")
+        _capture_agent_metadata(state, alias, api)
         _save()
 
     state.phase = Phase.EVALUATE
@@ -226,6 +265,7 @@ def step_evaluate(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
+            _record_timing_start(state, alias, "evaluate")
             _save()  # Persist count BEFORE sending to survive crash
             logger.info("Sending evaluate follow-up to %s", agent_label(alias, state))
 
@@ -251,6 +291,7 @@ def step_evaluate(
         _update_token_usage(state, alias, conversation)
         state.critiques[alias] = extract_latest_response(conversation)
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "evaluate")
         _save()
 
     state.phase = Phase.REVISE
@@ -290,6 +331,7 @@ def step_revise(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
+            _record_timing_start(state, alias, "revise")
             _save()  # Persist count BEFORE sending to survive crash
             logger.info("Sending revise follow-up to %s", agent_label(alias, state))
 
@@ -321,6 +363,8 @@ def step_revise(
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "revise")
+        _capture_agent_metadata(state, alias, api)
         _save()
 
     state.phase = Phase.VERIFY

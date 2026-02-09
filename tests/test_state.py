@@ -248,3 +248,15 @@ class TestCustomModels:
     def test_context_mode_default(self) -> None:
         state = init_state(task="test", repo="r")
         assert state.config.context_mode == "full"
+
+    def test_agent_timing_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.agent_timing == {}
+        state.agent_timing["agent_a"] = {"solve": {"start": 1.0, "end": 2.0}}
+        assert state.agent_timing["agent_a"]["solve"]["end"] == 2.0
+
+    def test_agent_metadata_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.agent_metadata == {}
+        state.agent_metadata["agent_a"] = {"summary": "Did stuff", "linesAdded": 42}
+        assert state.agent_metadata["agent_a"]["linesAdded"] == 42
