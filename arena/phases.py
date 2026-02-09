@@ -134,6 +134,29 @@ def step_solve(
     if pending:
         wait_for_all_agents(api, pending)
 
+    # Capture branch names from the status() response now that agents
+    # have finished.  The launch() response doesn't include branch names,
+    # but status() returns target.branchName once the agent has created
+    # its working branch.  (arena-run-summary2 issue #4 / fix #3)
+    for alias in state.alias_mapping:
+        if alias in state.branch_names:
+            continue  # Already have it (e.g. from a previous run)
+        agent_id = state.agent_ids.get(alias)
+        if not agent_id:
+            continue
+        try:
+            info = api.status(agent_id)
+            branch = (
+                info.get("target", {}).get("branchName")
+                or info.get("target", {}).get("branch_name")
+            )
+            if branch:
+                state.branch_names[alias] = branch
+                logger.info("Agent %s branch: %s", alias, branch)
+        except Exception:
+            logger.warning("Failed to fetch branch name for %s", alias)
+    _save()
+
     # Extract content from all finished agents (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:

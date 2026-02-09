@@ -19,6 +19,8 @@ from arena.state import ArenaState, Phase, ProgressStatus, init_state
 def make_mock_api(
     conversation_response: list[dict] | None = None,
     launch_id: str = "agent-123",
+    *,
+    status_extra: dict | None = None,
 ) -> MagicMock:
     """Create a mock CursorCloudAPI with sensible defaults.
 
@@ -28,7 +30,10 @@ def make_mock_api(
     """
     api = MagicMock()
     api.launch.return_value = {"id": launch_id}
-    api.status.return_value = {"status": "FINISHED"}
+    base_status: dict = {"status": "FINISHED"}
+    if status_extra:
+        base_status.update(status_extra)
+    api.status.return_value = base_status
 
     if conversation_response is None:
         conversation_response = [
@@ -110,6 +115,38 @@ class TestStepSolve:
         assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
+
+    def test_captures_branch_names_from_status(self) -> None:
+        """After solve, branch names are extracted from status() responses."""
+        state = init_state(task="test", repo="r")
+        api = make_mock_api()
+
+        # Make launch return unique IDs
+        agent_ids = {}
+        call_count = {"n": 0}
+
+        def mock_launch(**kw):
+            call_count["n"] += 1
+            return {"id": f"id-{call_count['n']}"}
+
+        api.launch.side_effect = mock_launch
+
+        # Status returns branch name in target.branchName
+        def mock_status(agent_id):
+            return {
+                "status": "FINISHED",
+                "target": {"branchName": f"cursor/branch-{agent_id}"},
+            }
+
+        api.status.side_effect = mock_status
+
+        step_solve(state, api)
+
+        # All agents should have branch names captured
+        assert len(state.branch_names) == 3
+        for alias in state.alias_mapping:
+            assert alias in state.branch_names
+            assert state.branch_names[alias].startswith("cursor/branch-")
 
 
 class TestStepEvaluate:
