@@ -23,10 +23,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import LiteralScalarString
 
 logger = logging.getLogger("arena")
 
 ALIASES = ["agent_a", "agent_b", "agent_c"]
+
+# Default placeholder task text.  ``init`` uses this when ``--task`` is
+# omitted; ``step`` and ``run`` refuse to proceed while the task is still
+# set to this value.
+TASK_PLACEHOLDER = "[DESCRIBE THE TASK HERE]"
 
 # Phase name → phase number, used in file naming.
 PHASE_NUMBERS: dict[str, int] = {"solve": 1, "evaluate": 2, "revise": 3}
@@ -384,6 +390,11 @@ def save_state(state: ArenaState, path: str = "arena/state.yaml") -> None:
     if path.endswith(".json"):
         serialized = json.dumps(dump, indent=2)
     else:
+        # Use literal block scalar (|) for the task field when it contains
+        # newlines, so multiline tasks are human-readable in the YAML file.
+        task_val = dump.get("config", {}).get("task", "")
+        if "\n" in task_val:
+            dump["config"]["task"] = LiteralScalarString(task_val)
         yaml = _yaml_instance()
         stream = StringIO()
         yaml.dump(dump, stream)

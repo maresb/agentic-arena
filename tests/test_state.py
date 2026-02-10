@@ -7,6 +7,7 @@ import tempfile
 from arena.state import (
     ALIASES,
     PHASE_NUMBERS,
+    TASK_PLACEHOLDER,
     ArenaConfig,
     DEFAULT_MODELS,
     Phase,
@@ -39,6 +40,11 @@ class TestArenaConfig:
     def test_arena_number(self) -> None:
         cfg = ArenaConfig(task="test", repo="r", arena_number=42)
         assert cfg.arena_number == 42
+
+
+class TestTaskPlaceholder:
+    def test_placeholder_value(self) -> None:
+        assert TASK_PLACEHOLDER == "[DESCRIBE THE TASK HERE]"
 
 
 class TestPhaseEnum:
@@ -244,6 +250,32 @@ class TestSaveAndLoad:
             loaded = load_state(yaml_path)
             assert loaded is not None
             assert loaded.config.task == "fallback test"
+
+    def test_yaml_multiline_task_uses_literal_block(self) -> None:
+        """Multi-line tasks are serialized with YAML literal block scalar (|)."""
+        multiline_task = "Line one\nLine two\nLine three"
+        state = init_state(task=multiline_task, repo="owner/repo")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.yaml")
+            save_state(state, path)
+            with open(path) as f:
+                content = f.read()
+            # The literal block scalar indicator should appear for the task
+            assert "task: |" in content or "task: |\n" in content
+            # Round-trip preserves content
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.config.task == multiline_task
+
+    def test_yaml_singleline_task_stays_inline(self) -> None:
+        """Single-line tasks are serialized inline (no block scalar)."""
+        state = init_state(task="Simple task", repo="owner/repo")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.yaml")
+            save_state(state, path)
+            with open(path) as f:
+                content = f.read()
+            assert "task: Simple task" in content
 
 
 class TestExpectedPath:
