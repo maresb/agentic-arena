@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -107,6 +108,31 @@ def _saver(state: ArenaState, path: str) -> Callable[[], None]:
         save_state(state, path)
 
     return _save
+
+
+def _save_conversation(
+    state_path: str,
+    alias: str,
+    conversation: list[dict],
+) -> None:
+    """Persist the full conversation transcript for *alias* to disk.
+
+    Writes to ``conversations/{alias}.json`` under the arena directory
+    (derived from *state_path*).  Overwrites on each call so the file
+    always reflects the latest state of the conversation.
+    """
+    arena_dir = os.path.dirname(state_path)
+    conv_dir = os.path.join(arena_dir, "conversations")
+    os.makedirs(conv_dir, exist_ok=True)
+    out_path = os.path.join(conv_dir, f"{alias}.json")
+    try:
+        with open(out_path, "w") as f:
+            json.dump(conversation, f, indent=2, ensure_ascii=False)
+        logger.debug(
+            "Saved conversation for %s (%d messages)", alias, len(conversation)
+        )
+    except OSError:
+        logger.warning("Failed to save conversation for %s to %s", alias, out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +325,8 @@ def step_solve(
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
 
+        _save_conversation(state_path, alias, conversation)
+
         state.solutions[alias] = solution
         state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
@@ -393,6 +421,8 @@ def step_evaluate(
         else:
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
+
+        _save_conversation(state_path, alias, conversation)
 
         state.critiques[alias] = critique
 
@@ -593,6 +623,8 @@ def step_revise(
         else:
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
+
+        _save_conversation(state_path, alias, conversation)
 
         state.solutions[alias] = solution
         state.analyses[alias] = analysis or ""
