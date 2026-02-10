@@ -121,7 +121,7 @@ def init(
         branch_only=branch_only,
         verify_mode=verify_mode,
     )
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     save_state(state, state_path)
 
     alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
@@ -159,7 +159,7 @@ def step(
     """Execute a single phase transition (one FSM step)."""
     _setup_logging(arena_dir, verbose=verbose)
 
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     before = load_state(state_path)
     if before is None:
         typer.echo(f"No arena state found at {state_path}")
@@ -189,7 +189,7 @@ def status(
     ] = DEFAULT_ARENA_DIR,
 ) -> None:
     """Show the current state of the arena."""
-    state_path = os.path.join(arena_dir, "state.json")
+    state_path = os.path.join(arena_dir, "state.yaml")
     state = load_state(state_path)
     if state is None:
         typer.echo(f"No arena state found at {state_path}")
@@ -204,6 +204,29 @@ def status(
 
     progress_display = {k: str(v) for k, v in state.phase_progress.items()}
     typer.echo(f"Phase progress: {progress_display}")
+
+    if state.branch_names:
+        typer.echo(f"Branch names: {state.branch_names}")
+
+    if state.agent_timing:
+        typer.echo("Agent timing:")
+        for alias, phases in sorted(state.agent_timing.items()):
+            model = state.alias_mapping.get(alias, "unknown")
+            for phase_name, times in sorted(phases.items()):
+                start = times.get("start")
+                end = times.get("end")
+                if start and end:
+                    duration = end - start
+                    typer.echo(f"  {alias} ({model}) {phase_name}: {duration:.1f}s")
+                elif start:
+                    typer.echo(f"  {alias} ({model}) {phase_name}: in progress")
+
+    if state.agent_metadata:
+        typer.echo("Agent metadata:")
+        for alias, meta in sorted(state.agent_metadata.items()):
+            model = state.alias_mapping.get(alias, "unknown")
+            parts = [f"{k}={v}" for k, v in meta.items()]
+            typer.echo(f"  {alias} ({model}): {', '.join(parts)}")
 
     if state.consensus_reached is not None:
         typer.echo(f"Consensus: {state.consensus_reached}")

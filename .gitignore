@@ -11,6 +11,7 @@ build/
 
 # Arena state (local runs)
 arena/state.json
+arena/state.yaml
 arena/round*/
 arena/report.md
 arena/orchestrator.log

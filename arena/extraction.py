@@ -108,6 +108,51 @@ def extract_latest_response(conversation: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _keyword_fallback(text: str) -> Verdict:
+    """Fallback verdict extraction using structured patterns and keywords.
+
+    Extraction priority (first match wins):
+    1. ``decision: CONSENSUS`` / ``decision: CONTINUE`` pattern
+    2. Last occurrence of a bare ``CONSENSUS`` or ``CONTINUE`` keyword
+
+    If both keywords appear, the *last* occurrence wins (judges typically
+    state the final decision at the end of their response).
+    """
+    # ── Priority 1: "decision: X" pattern (e.g. outside a verdict tag) ──
+    decision_match = re.search(
+        r"\bdecision\s*:\s*(CONSENSUS|CONTINUE)\b", text, re.IGNORECASE
+    )
+    if decision_match:
+        value = decision_match.group(1).upper()
+        logger.info("Keyword fallback: found 'decision: %s' pattern", value)
+        if value == "CONSENSUS":
+            return Verdict(decision=VerdictDecision.CONSENSUS)
+        return Verdict(decision=VerdictDecision.CONTINUE)
+
+    # ── Priority 2: bare keyword, prefer last occurrence ──
+    last_consensus = -1
+    last_continue = -1
+    for m in re.finditer(r"\bCONSENSUS\b", text):
+        last_consensus = m.start()
+    for m in re.finditer(r"\bCONTINUE\b", text):
+        last_continue = m.start()
+
+    if last_consensus >= 0 or last_continue >= 0:
+        if last_consensus > last_continue:
+            logger.info(
+                "Keyword fallback: last keyword is CONSENSUS (pos %d)", last_consensus
+            )
+            return Verdict(decision=VerdictDecision.CONSENSUS)
+        if last_continue > last_consensus:
+            logger.info(
+                "Keyword fallback: last keyword is CONTINUE (pos %d)", last_continue
+            )
+            return Verdict(decision=VerdictDecision.CONTINUE)
+
+    logger.warning("Keyword fallback: no CONSENSUS or CONTINUE keyword found")
+    return Verdict()
+
+
 def parse_verdict(text: str) -> Verdict:
     """Parse the structured verdict from the judge's response.
 
@@ -116,11 +161,9 @@ def parse_verdict(text: str) -> Verdict:
     """
     verdict_xml = extract_xml_section(text, "verdict")
     if verdict_xml is None:
-        # Fallback: scan for CONSENSUS or CONTINUE anywhere in text
+        # Fallback: structured pattern search then bare keyword scan
         logger.warning("No <verdict> tag found; falling back to keyword scan")
-        if re.search(r"\bCONSENSUS\b", text):
-            return Verdict(decision=VerdictDecision.CONSENSUS)
-        return Verdict()
+        return _keyword_fallback(text)
 
     decision = VerdictDecision.CONTINUE
     convergence_score: int | None = None
@@ -169,4 +212,17 @@ Please reformat using the required XML tags:
 <analysis>
 [your analysis content]
 </analysis>
+"""
+
+# Re-prompt template for when verdict extraction falls back to keywords
+VERDICT_RETRY_PROMPT = """Your verdict could not be reliably parsed.
+Please re-emit ONLY the structured verdict block in this exact format:
+
+<verdict>
+decision: CONSENSUS or CONTINUE
+convergence_score: [1-10]
+remaining_disagreements: [count]
+base_solution: [alias or "merged"]
+modifications: [list of changes]
+</verdict>
 """

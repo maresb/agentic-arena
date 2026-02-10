@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from collections.abc import Callable
 
 from arena.api import (
@@ -19,6 +20,7 @@ from arena.api import (
 )
 from arena.extraction import (
     RETRY_PROMPT,
+    VERDICT_RETRY_PROMPT,
     VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
@@ -35,6 +37,47 @@ from arena.prompts import (
 from arena.state import ArenaState, Phase, ProgressStatus, save_state
 
 logger = logging.getLogger("arena")
+
+
+def agent_label(alias: str, state: ArenaState) -> str:
+    """Return a human-readable label like ``agent_a (opus)`` for log messages."""
+    model = state.alias_mapping.get(alias)
+    if model:
+        return f"{alias} ({model})"
+    return alias
+
+
+def _record_timing_start(state: ArenaState, alias: str, phase_name: str) -> None:
+    """Record the start time for an agent's phase."""
+    if alias not in state.agent_timing:
+        state.agent_timing[alias] = {}
+    state.agent_timing[alias][phase_name] = {"start": time.time()}
+
+
+def _record_timing_end(state: ArenaState, alias: str, phase_name: str) -> None:
+    """Record the end time for an agent's phase."""
+    if alias not in state.agent_timing:
+        state.agent_timing[alias] = {}
+    entry = state.agent_timing[alias].get(phase_name, {})
+    entry["end"] = time.time()
+    state.agent_timing[alias][phase_name] = entry
+
+
+def _capture_agent_metadata(state: ArenaState, alias: str, api: CursorCloudAPI) -> None:
+    """Capture metadata (summary, linesAdded, filesChanged) from status()."""
+    agent_id = state.agent_ids.get(alias)
+    if not agent_id:
+        return
+    try:
+        info = api.status(agent_id)
+        meta: dict[str, str | int] = {}
+        for key in ("summary", "linesAdded", "filesChanged"):
+            if key in info:
+                meta[key] = info[key]
+        if meta:
+            state.agent_metadata[alias] = meta
+    except Exception:
+        logger.debug("Failed to capture metadata for %s", alias)
 
 
 def _update_token_usage(
@@ -101,7 +144,7 @@ def _extract_with_retry(
 
 
 def step_solve(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Launch agents to solve the task independently in parallel."""
     _save = _saver(state, state_path)
@@ -111,7 +154,8 @@ def step_solve(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
         if alias not in state.agent_ids:
-            logger.info("Launching agent %s (model=%s)", alias, model)
+            logger.info("Launching %s", agent_label(alias, state))
+            _record_timing_start(state, alias, "solve")
             agent = api.launch(
                 prompt=solve_prompt(state.config.task),
                 repo=state.config.repo,
@@ -134,6 +178,30 @@ def step_solve(
     if pending:
         wait_for_all_agents(api, pending)
 
+    # Capture branch names from the status() response now that agents
+    # have finished.  The launch() response doesn't include branch names,
+    # but status() returns target.branchName once the agent has created
+    # its working branch.  (arena-run-summary2 issue #4 / fix #3)
+    for alias in state.alias_mapping:
+        if alias in state.branch_names:
+            continue  # Already have it (e.g. from a previous run)
+        agent_id = state.agent_ids.get(alias)
+        if not agent_id:
+            continue
+        try:
+            info = api.status(agent_id)
+            branch = info.get("target", {}).get("branchName") or info.get(
+                "target", {}
+            ).get("branch_name")
+            if branch:
+                state.branch_names[alias] = branch
+                logger.info("%s branch: %s", agent_label(alias, state), branch)
+        except Exception:
+            logger.warning(
+                "Failed to fetch branch name for %s", agent_label(alias, state)
+            )
+    _save()
+
     # Extract content from all finished agents (with retry on missing tags)
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
@@ -146,6 +214,8 @@ def step_solve(
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "solve")
+        _capture_agent_metadata(state, alias, api)
         _save()
 
     state.phase = Phase.EVALUATE
@@ -160,7 +230,7 @@ def step_solve(
 
 
 def step_evaluate(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Each agent critiques the other two solutions without revising its own."""
     _save = _saver(state, state_path)
@@ -188,14 +258,18 @@ def step_evaluate(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending evaluate follow-up to %s (crash recovery)", alias)
+            logger.info(
+                "Re-sending evaluate follow-up to %s (crash recovery)",
+                agent_label(alias, state),
+            )
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
+            _record_timing_start(state, alias, "evaluate")
             _save()  # Persist count BEFORE sending to survive crash
-            logger.info("Sending evaluate follow-up to %s", alias)
+            logger.info("Sending evaluate follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -219,6 +293,7 @@ def step_evaluate(
         _update_token_usage(state, alias, conversation)
         state.critiques[alias] = extract_latest_response(conversation)
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "evaluate")
         _save()
 
     state.phase = Phase.REVISE
@@ -233,7 +308,7 @@ def step_evaluate(
 
 
 def step_revise(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """Each agent revises its solution based on all three critiques."""
     _save = _saver(state, state_path)
@@ -252,14 +327,18 @@ def step_revise(
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
                 continue  # Agent already received and may have replied
-            logger.info("Re-sending revise follow-up to %s (crash recovery)", alias)
+            logger.info(
+                "Re-sending revise follow-up to %s (crash recovery)",
+                agent_label(alias, state),
+            )
         else:
             state.sent_msg_counts[alias] = len(
                 api.get_conversation(state.agent_ids[alias])
             )
             state.phase_progress[alias] = ProgressStatus.SENT
+            _record_timing_start(state, alias, "revise")
             _save()  # Persist count BEFORE sending to survive crash
-            logger.info("Sending revise follow-up to %s", alias)
+            logger.info("Sending revise follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
@@ -289,6 +368,8 @@ def step_revise(
         state.solutions[alias] = solution
         state.analyses[alias] = analysis
         state.phase_progress[alias] = ProgressStatus.DONE
+        _record_timing_end(state, alias, "revise")
+        _capture_agent_metadata(state, alias, api)
         _save()
 
     state.phase = Phase.VERIFY
@@ -304,7 +385,7 @@ def step_revise(
 
 
 def step_verify(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.json"
+    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
     """A rotating judge evaluates all revised solutions for consensus.
 
@@ -329,7 +410,7 @@ def step_verify(
         _save()
 
     judge = state.verify_judge
-    logger.info("Judge for round %d: %s", state.round, judge)
+    logger.info("Judge for round %d: %s", state.round, agent_label(judge, state))
 
     # ── Step 2: Send verdict prompt (with crash-recovery re-send) ──
     need_send = False
@@ -345,14 +426,15 @@ def step_verify(
         saved_count = state.verify_prev_msg_count or 0
         if current_count <= saved_count:
             logger.info(
-                "Re-sending verify follow-up to judge %s (crash recovery)", judge
+                "Re-sending verify follow-up to judge %s (crash recovery)",
+                agent_label(judge, state),
             )
             need_send = True
 
     if need_send:
         solutions = list(state.solutions.items())
         analyses = list(state.analyses.items())
-        logger.info("Sending verify follow-up to judge %s", judge)
+        logger.info("Sending verify follow-up to judge %s", agent_label(judge, state))
         api.followup(
             agent_id=state.agent_ids[judge],
             prompt=verify_prompt(
@@ -369,6 +451,36 @@ def step_verify(
     verdict_text = extract_latest_response(conversation)
 
     verdict = parse_verdict(verdict_text)
+
+    # If the verdict was extracted via keyword fallback (no <verdict> tag
+    # and no convergence_score), re-prompt the judge once for proper
+    # formatting.  This improves reliability without changing the outcome
+    # when the re-prompt succeeds.
+    if (
+        verdict.convergence_score is None
+        and extract_xml_section(verdict_text, "verdict") is None
+    ):
+        logger.warning(
+            "Verdict extracted via keyword fallback; re-prompting judge for "
+            "structured <verdict> block"
+        )
+        retry_prev = len(conversation)
+        api.followup(agent_id=state.agent_ids[judge], prompt=VERDICT_RETRY_PROMPT)
+        wait_for_followup(api, state.agent_ids[judge], retry_prev)
+        conversation = api.get_conversation(state.agent_ids[judge])
+        _update_token_usage(state, judge, conversation)
+        retry_text = extract_latest_response(conversation)
+        retry_verdict = parse_verdict(retry_text)
+        # Use the retry result if it has a proper XML verdict
+        if extract_xml_section(retry_text, "verdict") is not None:
+            verdict = retry_verdict
+            verdict_text = retry_text
+            logger.info("Verdict re-prompt succeeded with structured XML")
+        else:
+            logger.warning(
+                "Verdict re-prompt still lacks <verdict> tag; using original"
+            )
+
     logger.info("Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score)
 
     # ── Step 4: Enforce convergence_score >= 8 for consensus ──
@@ -415,6 +527,10 @@ def step_verify(
             verdict.decision = VerdictDecision.CONTINUE
 
     # ── Step 6: Determine next phase ──
+    # Always persist the verdict text so post-hoc analysis is possible,
+    # even on CONTINUE rounds where the arena loops back.
+    state.verdict_history.append(verdict_text)
+
     if verdict.decision == VerdictDecision.CONSENSUS:
         state.phase = Phase.DONE
         state.completed = True
@@ -428,6 +544,9 @@ def step_verify(
         state.final_verdict = verdict_text
         state.verify_progress = ProgressStatus.DONE
     else:
+        # Persist verdict text on CONTINUE so the judge's reasoning is
+        # not discarded (arena-run-summary2 issue #2).
+        state.final_verdict = verdict_text
         state.round += 1
         state.phase = Phase.EVALUATE
         state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}

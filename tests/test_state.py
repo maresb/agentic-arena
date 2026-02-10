@@ -77,6 +77,7 @@ class TestInitState:
         assert state.agent_ids == {}
         assert state.judge_history == []
         assert state.verify_results == []
+        assert state.verdict_history == []
 
     def test_verify_idempotency_fields_default_none(self) -> None:
         state = init_state(task="test", repo="r")
@@ -183,7 +184,7 @@ class TestSaveAndLoad:
         """States saved with inline text (old format) still load correctly."""
         state = init_state(task="test", repo="r")
         # Simulate old-format JSON with inline text (no file: prefix)
-        dump = state.model_dump()
+        dump = state.model_dump(mode="json")
         dump["solutions"] = {"agent_a": "inline solution"}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "state.json")
@@ -192,6 +193,35 @@ class TestSaveAndLoad:
             loaded = load_state(path)
             assert loaded is not None
             assert loaded.solutions["agent_a"] == "inline solution"
+
+    def test_yaml_round_trip(self) -> None:
+        """State can be saved as YAML and loaded back correctly."""
+        state = init_state(task="YAML test", repo="owner/repo")
+        state.solutions = {"agent_a": "sol A"}
+        state.final_verdict = "All good"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "state.yaml")
+            save_state(state, path)
+            assert os.path.exists(path)
+            # Verify it's valid YAML, not JSON
+            with open(path) as f:
+                content = f.read()
+            assert not content.strip().startswith("{")  # Not JSON
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.config.task == "YAML test"
+            assert loaded == state
+
+    def test_yaml_fallback_to_json(self) -> None:
+        """load_state with .yaml path falls back to .json if YAML doesn't exist."""
+        state = init_state(task="fallback test", repo="r")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = os.path.join(tmpdir, "state.json")
+            save_state(state, json_path)
+            yaml_path = os.path.join(tmpdir, "state.yaml")
+            loaded = load_state(yaml_path)
+            assert loaded is not None
+            assert loaded.config.task == "fallback test"
 
 
 class TestCustomModels:
@@ -247,3 +277,15 @@ class TestCustomModels:
     def test_context_mode_default(self) -> None:
         state = init_state(task="test", repo="r")
         assert state.config.context_mode == "full"
+
+    def test_agent_timing_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.agent_timing == {}
+        state.agent_timing["agent_a"] = {"solve": {"start": 1.0, "end": 2.0}}
+        assert state.agent_timing["agent_a"]["solve"]["end"] == 2.0
+
+    def test_agent_metadata_field(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.agent_metadata == {}
+        state.agent_metadata["agent_a"] = {"summary": "Did stuff", "linesAdded": 42}
+        assert state.agent_metadata["agent_a"]["linesAdded"] == 42

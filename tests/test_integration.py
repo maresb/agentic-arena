@@ -33,7 +33,7 @@ class TestLiveAPI:
     def test_me_endpoint(self, api) -> None:
         """Verify authentication works."""
         result = api.me()
-        assert "email" in result or "id" in result
+        assert "userEmail" in result or "email" in result or "id" in result
 
     def test_list_models(self, api) -> None:
         """Verify model listing works."""

@@ -19,6 +19,8 @@ from arena.state import ArenaState, Phase, ProgressStatus, init_state
 def make_mock_api(
     conversation_response: list[dict] | None = None,
     launch_id: str = "agent-123",
+    *,
+    status_extra: dict | None = None,
 ) -> MagicMock:
     """Create a mock CursorCloudAPI with sensible defaults.
 
@@ -28,7 +30,10 @@ def make_mock_api(
     """
     api = MagicMock()
     api.launch.return_value = {"id": launch_id}
-    api.status.return_value = {"status": "FINISHED"}
+    base_status: dict = {"status": "FINISHED"}
+    if status_extra:
+        base_status.update(status_extra)
+    api.status.return_value = base_status
 
     if conversation_response is None:
         conversation_response = [
@@ -110,6 +115,37 @@ class TestStepSolve:
         assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
+
+    def test_captures_branch_names_from_status(self) -> None:
+        """After solve, branch names are extracted from status() responses."""
+        state = init_state(task="test", repo="r")
+        api = make_mock_api()
+
+        # Make launch return unique IDs
+        call_count = {"n": 0}
+
+        def mock_launch(**kw):
+            call_count["n"] += 1
+            return {"id": f"id-{call_count['n']}"}
+
+        api.launch.side_effect = mock_launch
+
+        # Status returns branch name in target.branchName
+        def mock_status(agent_id):
+            return {
+                "status": "FINISHED",
+                "target": {"branchName": f"cursor/branch-{agent_id}"},
+            }
+
+        api.status.side_effect = mock_status
+
+        step_solve(state, api)
+
+        # All agents should have branch names captured
+        assert len(state.branch_names) == 3
+        for alias in state.alias_mapping:
+            assert alias in state.branch_names
+            assert state.branch_names[alias].startswith("cursor/branch-")
 
 
 class TestStepEvaluate:
@@ -428,6 +464,54 @@ class TestStepVerify:
         assert state.verify_judge is None
         assert state.verify_prev_msg_count is None
         assert state.verify_results == []
+
+    def test_verdict_text_persisted_on_continue(self) -> None:
+        """On CONTINUE, final_verdict is set so the judge's reasoning is preserved."""
+        state = self._make_revised_state()
+        verdict_content = (
+            "My analysis...\n"
+            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
+        )
+        verdict_response = [{"role": "assistant", "content": verdict_content}]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert state.final_verdict is not None
+        assert "CONTINUE" in state.final_verdict
+
+    def test_verdict_history_accumulates(self) -> None:
+        """Each verify round appends to verdict_history."""
+        state = self._make_revised_state()
+        verdict_content = (
+            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
+        )
+        verdict_response = [{"role": "assistant", "content": verdict_content}]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        assert state.verdict_history == []
+        step_verify(state, api)
+        assert len(state.verdict_history) == 1
+        assert "CONTINUE" in state.verdict_history[0]
+
+    def test_verdict_history_on_consensus(self) -> None:
+        """Consensus verdict is also appended to verdict_history."""
+        state = self._make_revised_state()
+        verdict_response = [
+            {
+                "role": "assistant",
+                "content": (
+                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
+                ),
+            }
+        ]
+        api = make_mock_api(conversation_response=verdict_response)
+
+        step_verify(state, api)
+
+        assert len(state.verdict_history) == 1
+        assert "CONSENSUS" in state.verdict_history[0]
+        assert state.final_verdict is not None
 
 
 class TestExtractWithRetry:

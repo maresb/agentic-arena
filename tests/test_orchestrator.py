@@ -98,13 +98,14 @@ class TestArchiveRound:
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
             files = os.listdir(tmpdir)
-            solution_files = [f for f in files if "solve" in f]
+            solution_files = [f for f in files if "solution" in f]
             analysis_files = [f for f in files if "analysis" in f]
             assert len(solution_files) == 3
             assert len(analysis_files) == 3
-            # Verify deterministic naming format
+            # Verify new naming format: {round}-{phase}-{model}-{type}-{uid}.md
             for f in solution_files:
-                assert f.startswith("00-01-solve-")
+                assert f.startswith("00-solve-")
+                assert "-solution-" in f
                 assert f.endswith(".md")
 
     def test_archives_critiques(self) -> None:
@@ -118,7 +119,7 @@ class TestArchiveRound:
             files = os.listdir(tmpdir)
             critique_files = [f for f in files if "critique" in f]
             assert len(critique_files) == 1
-            assert critique_files[0].startswith("00-02-critique-")
+            assert critique_files[0].startswith("00-evaluate-")
 
     def test_archives_verdict_on_done(self) -> None:
         state = init_state(task="test", repo="r")
@@ -131,9 +132,9 @@ class TestArchiveRound:
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
             files = os.listdir(tmpdir)
-            verdict_files = [f for f in files if "verify" in f]
+            verdict_files = [f for f in files if "verdict" in f]
             assert len(verdict_files) == 1
-            assert verdict_files[0].startswith("00-04-verify-")
+            assert verdict_files[0].startswith("00-verify-")
 
     def test_empty_state_produces_no_files(self) -> None:
         state = init_state(task="test", repo="r")
@@ -171,7 +172,7 @@ class TestStepOnce:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
             state.completed = True
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             import pytest
 
@@ -182,7 +183,7 @@ class TestStepOnce:
         """step_once should invoke the solve handler and save state."""
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="r")
-            save_state(state, os.path.join(tmpdir, "state.json"))
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             mock_api = MagicMock()
             ids = iter(["id-1", "id-2", "id-3"])
