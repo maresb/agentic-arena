@@ -94,18 +94,51 @@ This is the largest change. It requires:
 
 ### 6. Replace single-judge with multi-agent voting
 
-**Problem:** Single judge picks its own solution as the base (self-selection bias).
+**Problem:** Single judge picks its own solution as the base (self-selection bias). The judge consistently selects its own solution, regardless of quality.
 
-**Design:** In `step_verify()`:
+**Design:** Replace the rotating-judge model with an all-agents-vote protocol:
 
-- Send the verify prompt to all agents (not just one judge).
-- Each agent votes on the best solution *excluding its own*.
-- Require 2/3 agreement for consensus.
-- If no 2/3 agreement, CONTINUE.
+1. **All agents receive the verify prompt** (not just one judge). Each agent sees all revised solutions and analyses, same as today.
 
-This is a significant redesign of the verify phase. The current `verify_judge` / `verify_prev_msg_count` scalars become per-agent dicts. The verdict extraction runs on all responses and a voting tally determines the outcome.
+2. **Each agent votes for the best solution, excluding its own.** An agent may vote for *multiple* others if it considers them effectively tied — this avoids forcing artificial distinctions between near-equivalent solutions.
 
-**Files:** [arena/phases.py](arena/phases.py) `step_verify()`, [arena/prompts.py](arena/prompts.py) `verify_prompt()`, [arena/state.py](arena/state.py) (verify state fields)
+3. **Each agent independently provides a convergence score** (1–10, same scale as today).
+
+4. **The final consensus score is the minimum of all individual scores.** This is deliberately conservative: a single dissenting agent who sees substantive disagreements keeps the arena iterating. No optimistic outlier can drag up the aggregate.
+
+5. **Winner selection requires N-1 votes.** If the final consensus score reaches the threshold (>= 8) and exactly one solution received a vote from every non-author agent (i.e. all N-1 other agents voted for it), that solution is selected as the base. If votes are split (no solution has N-1), the verdict is CONTINUE even if the score threshold is met — convergence without agreement on a winner means the agents still need to reconcile.
+
+**Verdict extraction changes:**
+
+The `<verdict>` XML block per agent becomes:
+
+```xml
+<verdict>
+convergence_score: [1-10]
+best_solutions: [comma-separated aliases, excluding own, at least one required]
+remaining_disagreements: [count]
+rationale: [why these solutions are best / what still differs]
+</verdict>
+```
+
+The orchestrator then aggregates:
+- `final_score = min(agent_scores)`
+- `vote_tally = Counter(all best_solution votes across agents)`
+- If `final_score >= 8` and `vote_tally[winner] == N-1`: CONSENSUS, select winner
+- If `final_score >= 8` but votes are split: CONTINUE (score met but no agreement on winner)
+- If `final_score < 8`: CONTINUE
+
+**State changes:**
+
+The current scalar `verify_judge` / `verify_prev_msg_count` fields become per-agent dicts. New fields needed:
+
+- `verify_votes: dict[str, list[str]]` — each agent's list of voted-for aliases
+- `verify_scores: dict[str, int]` — each agent's individual convergence score
+- `verify_winner: str | None` — the elected winner alias (if any)
+
+The existing `verify_judge` and `judge_history` fields become unused and can be removed.
+
+**Files:** [arena/phases.py](arena/phases.py) `step_verify()`, [arena/prompts.py](arena/prompts.py) `verify_prompt()`, [arena/extraction.py](arena/extraction.py) (per-agent verdict parsing), [arena/state.py](arena/state.py) (verify state fields)
 
 ---
 
