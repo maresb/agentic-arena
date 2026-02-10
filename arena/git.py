@@ -18,8 +18,9 @@ logger = logging.getLogger("arena")
 def parse_repo_owner_name(repo: str) -> tuple[str, str]:
     """Split a repo identifier into ``(owner, name)``.
 
-    Accepts both full URLs (``https://github.com/owner/repo``) and
-    shorthand (``owner/repo``).  Trailing ``.git`` suffixes are stripped.
+    Accepts full HTTPS URLs (``https://github.com/owner/repo``), SSH URLs
+    (``git@github.com:owner/repo.git``), and shorthand (``owner/repo``).
+    Trailing ``.git`` suffixes are stripped.
 
     Raises :class:`ValueError` if the input cannot be parsed.
     """
@@ -32,6 +33,15 @@ def parse_repo_owner_name(repo: str) -> tuple[str, str]:
         if len(parts) >= 5 and parts[2] in ("github.com", "www.github.com"):
             return parts[3], parts[4]
         raise ValueError(f"Cannot parse GitHub URL: {repo!r}")
+    # git@github.com:owner/repo  (SSH)
+    if url.startswith("git@"):
+        # Strip the "git@<host>:" prefix then split on "/"
+        colon_idx = url.index(":")
+        path_part = url[colon_idx + 1 :]
+        segments = path_part.split("/")
+        if len(segments) == 2 and all(segments):
+            return segments[0], segments[1]
+        raise ValueError(f"Cannot parse SSH URL: {repo!r}")
     # owner/repo
     segments = url.split("/")
     if len(segments) == 2 and all(segments):
@@ -119,4 +129,32 @@ def fetch_file_from_branch(
         return base64.b64decode(content_b64).decode("utf-8")
     except Exception:
         logger.warning("Failed to base64-decode content for %s @ %s", path, branch)
+        return None
+
+
+def default_repo_from_remote(remote: str = "origin") -> str | None:
+    """Derive an ``owner/repo`` string from a git remote URL.
+
+    Runs ``git remote get-url <remote>`` and parses the result using
+    :func:`parse_repo_owner_name`.  Returns ``None`` if the command
+    fails or the URL is not a recognizable GitHub URL.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", remote],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    url = result.stdout.strip()
+    if not url:
+        return None
+    try:
+        owner, name = parse_repo_owner_name(url)
+        return f"{owner}/{name}"
+    except ValueError:
         return None

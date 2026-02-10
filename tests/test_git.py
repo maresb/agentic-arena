@@ -9,7 +9,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from arena.git import fetch_file_from_branch, parse_repo_owner_name
+from arena.git import (
+    default_repo_from_remote,
+    fetch_file_from_branch,
+    parse_repo_owner_name,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +56,22 @@ class TestParseRepoOwnerName:
     def test_invalid_empty_segments(self) -> None:
         with pytest.raises(ValueError, match="Expected"):
             parse_repo_owner_name("/repo")
+
+    def test_ssh_url(self) -> None:
+        assert parse_repo_owner_name("git@github.com:owner/repo.git") == (
+            "owner",
+            "repo",
+        )
+
+    def test_ssh_url_no_dot_git(self) -> None:
+        assert parse_repo_owner_name("git@github.com:owner/repo") == (
+            "owner",
+            "repo",
+        )
+
+    def test_invalid_ssh_url(self) -> None:
+        with pytest.raises(ValueError, match="Cannot parse SSH"):
+            parse_repo_owner_name("git@github.com:justname")
 
     def test_invalid_url_not_github(self) -> None:
         with pytest.raises(ValueError, match="Cannot parse"):
@@ -159,3 +179,64 @@ class TestFetchFileFromBranch:
         mock_run.return_value = _make_gh_response("Caf\u00e9 \u2603 snowman")
         result = fetch_file_from_branch("owner/repo", "branch", "file.md")
         assert result == "Caf\u00e9 \u2603 snowman"
+
+
+# ---------------------------------------------------------------------------
+# default_repo_from_remote
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRepoFromRemote:
+    @patch("arena.git.subprocess.run")
+    def test_https_remote(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="https://github.com/owner/repo\n",
+            stderr="",
+        )
+        assert default_repo_from_remote() == "owner/repo"
+
+    @patch("arena.git.subprocess.run")
+    def test_ssh_remote(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="git@github.com:owner/repo.git\n",
+            stderr="",
+        )
+        assert default_repo_from_remote() == "owner/repo"
+
+    @patch("arena.git.subprocess.run")
+    def test_no_remote(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"], returncode=1, stdout="", stderr="fatal: no such remote"
+        )
+        assert default_repo_from_remote() is None
+
+    @patch("arena.git.subprocess.run")
+    def test_git_not_installed(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = FileNotFoundError("No such file: 'git'")
+        assert default_repo_from_remote() is None
+
+    @patch("arena.git.subprocess.run")
+    def test_non_github_remote(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="https://gitlab.com/owner/repo\n",
+            stderr="",
+        )
+        assert default_repo_from_remote() is None
+
+    @patch("arena.git.subprocess.run")
+    def test_custom_remote_name(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="https://github.com/other/repo\n",
+            stderr="",
+        )
+        assert default_repo_from_remote("upstream") == "other/repo"
+        args = mock_run.call_args[0][0]
+        assert "upstream" in args
