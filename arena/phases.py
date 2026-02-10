@@ -111,28 +111,31 @@ def _saver(state: ArenaState, path: str) -> Callable[[], None]:
 
 
 def _save_conversation(
+    state: ArenaState,
     state_path: str,
     alias: str,
     conversation: list[dict],
 ) -> None:
-    """Persist the full conversation transcript for *alias* to disk.
+    """Persist the full conversation transcript to disk.
 
-    Writes to ``conversations/{alias}.json`` under the arena directory
-    (derived from *state_path*).  Overwrites on each call so the file
-    always reflects the latest state of the conversation.
+    Writes to ``conversations/{model}.json`` under the arena directory
+    (derived from *state_path*), using the model nickname rather than
+    the alias.  Overwrites on each call so the file always reflects
+    the latest state of the conversation.
     """
     arena_dir = os.path.dirname(state_path)
     conv_dir = os.path.join(arena_dir, "conversations")
     os.makedirs(conv_dir, exist_ok=True)
-    out_path = os.path.join(conv_dir, f"{alias}.json")
+    model = state.alias_mapping.get(alias, alias)
+    out_path = os.path.join(conv_dir, f"{model}.json")
     try:
         with open(out_path, "w") as f:
             json.dump(conversation, f, indent=2, ensure_ascii=False)
         logger.debug(
-            "Saved conversation for %s (%d messages)", alias, len(conversation)
+            "Saved conversation for %s (%d messages)", model, len(conversation)
         )
     except OSError:
-        logger.warning("Failed to save conversation for %s to %s", alias, out_path)
+        logger.warning("Failed to save conversation for %s to %s", model, out_path)
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +328,7 @@ def step_solve(
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
 
-        _save_conversation(state_path, alias, conversation)
+        _save_conversation(state, state_path, alias, conversation)
 
         state.solutions[alias] = solution
         state.analyses[alias] = analysis or ""
@@ -422,7 +425,7 @@ def step_evaluate(
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
 
-        _save_conversation(state_path, alias, conversation)
+        _save_conversation(state, state_path, alias, conversation)
 
         state.critiques[alias] = critique
 
@@ -624,7 +627,7 @@ def step_revise(
             conversation = api.get_conversation(state.agent_ids[alias])
             _update_token_usage(state, alias, conversation)
 
-        _save_conversation(state_path, alias, conversation)
+        _save_conversation(state, state_path, alias, conversation)
 
         state.solutions[alias] = solution
         state.analyses[alias] = analysis or ""
