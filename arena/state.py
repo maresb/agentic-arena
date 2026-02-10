@@ -85,7 +85,6 @@ class ArenaConfig(BaseModel, frozen=True):
     verify_commands: list[str] = Field(default_factory=list)
     paste_solutions: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
-    context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
 
 
 class ArenaState(BaseModel):

@@ -275,10 +275,6 @@ class TestCustomModels:
         state = init_state(task="test", repo="r")
         assert state.verify_progress == ProgressStatus.PENDING
 
-    def test_context_mode_default(self) -> None:
-        state = init_state(task="test", repo="r")
-        assert state.config.context_mode == "full"
-
     def test_agent_timing_field(self) -> None:
         state = init_state(task="test", repo="r")
         assert state.agent_timing == {}
