@@ -1,205 +1,186 @@
 # Arena Run 2 Fixes
 
-## Tier 1: Critical Bugs (correctness)
+## Tier 1: Critical Bugs (correctness) -- DONE
 
-### 1. Fix `wait_for_followup` race condition
+All three critical bugs have been fixed in the codebase.
 
-**Problem:** [api.py](arena/api.py) line 274 returns as soon as a new assistant message appears (`len(messages) > previous_msg_count`), without requiring the agent to be `FINISHED`. Streaming responses may be truncated, losing the `<verdict>` tag.
+### 1. Fix `wait_for_followup` race condition -- DONE
 
-**Fix:** After detecting a new message, also poll `api.status()` to confirm the agent is `FINISHED` before returning. If the agent is still `RUNNING`, continue polling -- the message text may still be streaming.
+**Problem:** `wait_for_followup` returned as soon as a new assistant message appeared, without requiring the agent to be `FINISHED`. Streaming responses could be truncated.
 
-```python
-# In wait_for_followup(), after line 274:
-if len(messages) > previous_msg_count and is_assistant_message(messages[-1]):
-    # Ensure agent is actually finished (not still streaming)
-    info = api.status(agent_id)
-    if info["status"] == "FINISHED":
-        return "FINISHED"
-    # else: agent still running, message may be partial — keep polling
-```
+**Fix:** After detecting a new message, polls `api.status()` to confirm `FINISHED` before returning. If still `RUNNING`, continues polling. Applied to both `wait_for_followup` and `wait_for_all_followups`.
 
-**File:** [arena/api.py](arena/api.py) ~line 274
+### 2. Always persist verdict text on CONTINUE -- DONE
 
-### 2. Always persist verdict text on CONTINUE
+**Problem:** The CONTINUE branch discarded the judge's reasoning.
 
-**Problem:** [phases.py](arena/phases.py) line 430 `else` branch (CONTINUE) does not save `verdict_text`, discarding the judge's reasoning.
+**Fix:** Added `verdict_history: list[str]` field to `ArenaState` that accumulates every verdict text. `final_verdict` is also set on CONTINUE for immediate access.
 
-**Fix:** Set `state.final_verdict = verdict_text` in the CONTINUE branch as well. Rename the field or add a new `verdict_history` list to accumulate verdicts across rounds (since `final_verdict` is overwritten). At minimum, persist it immediately.
+### 3. Extract branch names from `status()` response -- DONE
 
-```python
-# In step_verify(), the else branch at line 430:
-else:
-    state.final_verdict = verdict_text  # <-- ADD: persist even on CONTINUE
-    state.round += 1
-    ...
-```
+**Problem:** `branch_names` was always empty because `launch()` doesn't return branch names.
 
-**Consideration:** Since CONTINUE means we loop back, the field gets overwritten next round. A better design is a `verdict_history: list[str]` field on `ArenaState` that appends each verdict. The `final_verdict` stays as-is for the terminal verdict. This requires a state schema change.
-
-**Files:** [arena/phases.py](arena/phases.py) ~line 430, [arena/state.py](arena/state.py) (add `verdict_history` field)
-
-### 3. Extract branch names from `status()` response
-
-**Problem:** `branch_names` is always empty because the API `launch()` response doesn't include branch names. But `status()` returns `target.branchName`.
-
-**Fix:** After `wait_for_agent` / `wait_for_all_agents` completes in `step_solve()`, fetch `api.status(agent_id)` and read `info["target"]["branchName"]`. Store in `state.branch_names[alias]`.
-
-```python
-# In step_solve(), after wait_for_all_agents() at ~line 135:
-for alias, agent_id in pending.items():
-    info = api.status(agent_id)
-    branch = info.get("target", {}).get("branchName")
-    if branch:
-        state.branch_names[alias] = branch
-_save()
-```
-
-**File:** [arena/phases.py](arena/phases.py) ~line 135
+**Fix:** After `wait_for_all_agents()` completes in `step_solve()`, fetches `status()` for each agent and reads `target.branchName`.
 
 ---
 
-## Tier 2: Collaboration Quality
+## Tier 2: Collaboration Quality -- PARTIALLY DONE
 
-### 4. Improve verdict extraction reliability
+### 4. Improve verdict extraction reliability -- DONE
 
-**Problem:** Keyword fallback in [extraction.py](arena/extraction.py) line 121 is fragile -- scans for `\bCONSENSUS\b` anywhere, no priority logic, defaults to CONTINUE.
+All three sub-items implemented:
+- (a) `decision: CONSENSUS/CONTINUE` regex pattern as middle fallback.
+- (b) Last occurrence wins when both keywords present.
+- (c) `VERDICT_RETRY_PROMPT` re-prompts the judge for structured XML when keyword fallback is used.
 
-**Fix (multi-layered):**
+### 5. File-committed outputs as source of truth -- TODO
 
-- (a) Add a "decision: CONSENSUS/CONTINUE" regex pattern as a middle fallback between XML and bare keyword.
-- (b) When keyword scan finds both `CONSENSUS` and `CONTINUE`, prefer the last occurrence.
-- (c) Add a verdict re-prompt: when `parse_verdict` returns a keyword-fallback result, send a follow-up asking the judge to re-emit the `<verdict>` block.
+**Problem:** Agents critique 10-15 line conversation summaries instead of actual branch deliverables (66-375 lines). This caused the weakest deliverable to be selected as winner.
 
-**Files:** [arena/extraction.py](arena/extraction.py), [arena/phases.py](arena/phases.py) (for re-prompt logic)
+**Design:** Agents commit structured outputs as files to predetermined paths on their branch. The orchestrator fetches these files by known path. Conversation extraction becomes a fallback only.
 
-### 5. Use branch files as source of truth for critique
+#### File naming convention
 
-**Problem:** Agents critique 10-15 line conversation summaries instead of the actual branch deliverables (66-375 lines). This caused the weakest deliverable to be selected as winner.
+Pattern: `{round:02d}-{phase_number}-{phase_name}-{identity}-{artifact}.{ext}`
 
-**Design:** After each solve/revise phase, if `state.branch_names` is populated:
+Phase numbers: solve=1, evaluate=2, revise=3.
 
-1. Use `git ls-remote` or `gh api` to fetch the branch's file tree.
-2. Fetch the target deliverable file(s) content (e.g., `recommendations.md`).
-3. Use branch file content as the `solutions` passed into evaluate/verify prompts.
-4. Fall back to conversation extraction if no branch changes detected.
+Agent-committed files use alias as identity (e.g. `00-1-solve-agent_a-solution.md`). Orchestrator archive uses model nickname + content-hash uid (e.g. `00-1-solve-opus-solution-a1b2c3.md`).
 
-This is the largest change. It requires:
+Each agent commits its outputs to `arenas/NNNN/` in the target repo on its branch:
 
-- A new utility function to fetch file content from a remote branch (via GitHub API / `gh` CLI).
-- A config field for the target deliverable filename(s).
-- Changes to [phases.py](arena/phases.py) `step_evaluate()` and `step_verify()` to prefer branch content.
-- Changes to [prompts.py](arena/prompts.py) to format branch-sourced content.
-
-**Files:** [arena/api.py](arena/api.py) or new `arena/git.py`, [arena/phases.py](arena/phases.py), [arena/prompts.py](arena/prompts.py), [arena/state.py](arena/state.py)
-
-### 6. Replace single-judge with multi-agent voting
-
-**Problem:** Single judge picks its own solution as the base (self-selection bias). The judge consistently selects its own solution, regardless of quality.
-
-**Design:** Replace the rotating-judge model with an all-agents-vote protocol:
-
-1. **All agents receive the verify prompt** (not just one judge). Each agent sees all revised solutions and analyses, same as today.
-
-2. **Each agent votes for the best solution, excluding its own.** An agent may vote for *multiple* others if it considers them effectively tied — this avoids forcing artificial distinctions between near-equivalent solutions.
-
-3. **Each agent independently provides a convergence score** (1–10, same scale as today).
-
-4. **The final consensus score is the minimum of all individual scores.** This is deliberately conservative: a single dissenting agent who sees substantive disagreements keeps the arena iterating. No optimistic outlier can drag up the aggregate.
-
-5. **Winner selection requires N-1 votes.** If the final consensus score reaches the threshold (>= 8) and exactly one solution received a vote from every non-author agent (i.e. all N-1 other agents voted for it), that solution is selected as the base. If votes are split (no solution has N-1), the verdict is CONTINUE even if the score threshold is met — convergence without agreement on a winner means the agents still need to reconcile.
-
-**Verdict extraction changes:**
-
-The `<verdict>` XML block per agent becomes:
-
-```xml
-<verdict>
-convergence_score: [1-10]
-best_solutions: [comma-separated aliases, excluding own, at least one required]
-remaining_disagreements: [count]
-rationale: [why these solutions are best / what still differs]
-</verdict>
+```
+arenas/0003/
+  00-1-solve-agent_a-solution.md
+  00-1-solve-agent_a-analysis.md
+  00-2-evaluate-agent_a-critique.md
+  00-2-evaluate-agent_a-verdict.json
+  00-3-revise-agent_a-solution.md
+  00-3-revise-agent_a-analysis.md
 ```
 
-The orchestrator then aggregates:
-- `final_score = min(agent_scores)`
+#### Commit convention
+
+Arena output files must be committed **separately** from any code or work artifacts, making them trivially droppable via `git rebase -i` after the run:
+
+1. Commit arena files in a **dedicated commit**, separate from code changes.
+2. Commit message: `[arena] round 00 solve agent_a` (prefix makes them greppable).
+3. Only files under `arenas/NNNN/` in the commit. No code, no other files.
+4. Commit code changes first, then the arena commit on top (arena commit is always the tip).
+
+#### Fallback chain
+
+1. **Re-prompt** the agent to commit the expected file.
+2. **Conversation extraction** (XML tags for solution/analysis, JSON fenced block for verdict).
+
+#### Implementation
+
+- New module `arena/git.py`: `fetch_file_from_branch()` using `gh api` to fetch and base64-decode file content from a branch. Helper `parse_repo_owner_name()` to split repo URLs.
+- Add `arena_number: int` to `ArenaConfig` so prompts can reference `arenas/NNNN/`.
+- All prompts tell each agent its alias and exact filenames to commit.
+- Phase functions fetch committed files from branches after agents finish, with re-prompt then conversation fallback.
+
+### 6. Replace single-judge with multi-agent voting (collapsed into Evaluate) -- TODO
+
+**Problem:** Single judge picks its own solution as the base (self-selection bias).
+
+**Design:** Replace the 4-phase loop (Solve/Evaluate/Revise/Verify) with a 3-phase loop. The old Evaluate and Verify phases are collapsed into a single Evaluate phase that produces both critique and verdict. All agents vote -- no single judge.
+
+#### 3-phase state machine
+
+```
+Solve -> Evaluate -> DONE (consensus)
+                  -> Revise -> Evaluate -> DONE (consensus)
+                                        -> Revise -> Evaluate -> ...
+                                                              -> DONE (max rounds)
+```
+
+Consensus can be detected immediately after the first Evaluate (before any revision), saving a full round-trip when agents agree out of the gate.
+
+#### Phase summary
+
+- **Solve** (phase 1): Each agent independently works on the task, committing code/artifacts plus a solution summary and risk analysis.
+- **Evaluate** (phase 2): Each agent reads all solutions (fetched from branches), writes a critique of each, AND votes for the best solution(s) excluding its own with a convergence score.
+- **Revise** (phase 3): Each agent reads all critiques and produces a revised solution incorporating the strongest feedback.
+
+#### Verdict format: JSON (not XML)
+
+Each agent commits a `verdict.json` file, directly parseable with `json.loads()`:
+
+```json
+{
+  "convergence_score": 9,
+  "best_solutions": ["agent_b", "agent_c"],
+  "remaining_disagreements": 0,
+  "rationale": "All three solutions converged on layered backup with 3-2-1 rule..."
+}
+```
+
+No XML parsing, no keyword fallback, no line-by-line string splitting.
+
+#### Consensus aggregation
+
+- `final_score = min(all agent scores)` -- deliberately conservative.
 - `vote_tally = Counter(all best_solution votes across agents)`
-- If `final_score >= 8` and `vote_tally[winner] == N-1`: CONSENSUS, select winner
-- If `final_score >= 8` but votes are split: CONTINUE (score met but no agreement on winner)
-- If `final_score < 8`: CONTINUE
+- If `final_score >= 8` and one solution has N-1 votes: **CONSENSUS**, that solution wins.
+- If `final_score >= 8` but votes split: **CONTINUE** (convergence without agreement on a winner).
+- If `final_score < 8`: **CONTINUE**.
+- If `round >= max_rounds`: **DONE** (no consensus).
 
-**State changes:**
+#### State changes
 
-The current scalar `verify_judge` / `verify_prev_msg_count` fields become per-agent dicts. New fields needed:
+**Remove** (hard breaking, no backward compatibility):
+- `Phase.VERIFY` from the Phase enum
+- `verify_judge`, `verify_prev_msg_count`, `judge_history`, `verify_progress`
+- `paste_solutions` from ArenaConfig
 
-- `verify_votes: dict[str, list[str]]` — each agent's list of voted-for aliases
-- `verify_scores: dict[str, int]` — each agent's individual convergence score
-- `verify_winner: str | None` — the elected winner alias (if any)
+**Add:**
+- `verify_votes: dict[str, list[str]]` -- each agent's voted-for aliases
+- `verify_scores: dict[str, int]` -- each agent's convergence score
+- `verify_winner: str | None` -- the elected winner alias
 
-The existing `verify_judge` and `judge_history` fields become unused and can be removed.
+#### Files affected
 
-**Files:** [arena/phases.py](arena/phases.py) `step_verify()`, [arena/prompts.py](arena/prompts.py) `verify_prompt()`, [arena/extraction.py](arena/extraction.py) (per-agent verdict parsing), [arena/state.py](arena/state.py) (verify state fields)
+- `arena/state.py` -- Phase enum, ArenaConfig, ArenaState field changes
+- `arena/extraction.py` -- Replace `Verdict`/`parse_verdict`/`_keyword_fallback` with `VoteVerdict`/`parse_vote_verdict_json`
+- `arena/prompts.py` -- Rewrite all 3 templates; delete `verify_prompt` and `_branch_hint_block`
+- `arena/phases.py` -- Rewrite `step_solve`, merge `step_evaluate` + `step_verify`, rewrite `step_revise`, delete `step_verify`
+- `arena/orchestrator.py` -- Update `PHASE_HANDLERS`, `_archive_round`, `generate_final_report`
+- `arena/__main__.py` -- Remove `--paste-solutions`, add `arena_number`, update status display
 
 ---
 
-## Tier 3: Observability / UX
+## Tier 3: Observability / UX -- DONE
 
-### 7. Include model names in log messages
+All four items have been implemented in the codebase.
 
-**Problem:** Logs say "Agent agent_a finished" without the model name.
+### 7. Include model names in log messages -- DONE
 
-**Fix:** Audit all `logger.info/warning` calls that reference aliases and append the model name. Create a helper: `def agent_label(alias, state) -> str` that returns e.g. `"agent_a (opus)"`.
+Added `agent_label(alias, state)` helper returning e.g. `"agent_a (opus)"`. Used throughout `phases.py`.
 
-**Files:** [arena/phases.py](arena/phases.py), [arena/api.py](arena/api.py)
+### 8. Switch state file to YAML -- DONE
 
-### 8. Switch state file to YAML
+`ruamel.yaml` added to dependencies. `save_state()` writes YAML by default. `load_state()` reads both YAML and legacy JSON.
 
-**Problem:** JSON is hard to read during manual step-by-step runs.
+### 9. Redesign archive naming -- DONE
 
-**Fix:** Replace `json.dump`/`json.load` in [state.py](arena/state.py) `save_state()`/`load_state()` with `ruamel.yaml`. Keep `.json` backward-compatible loading. New saves write `state.yaml`.
+New scheme: `{round:02d}-{phase_name}-{model}-{artifact_type}-{uid}.md`. Uses phase names and model names instead of misleading phase numbers and agent letters. Will be updated to include phase numbers (`{round:02d}-{phase_number}-{phase_name}-...`) as part of item #5.
 
-**Dependency:** Add `ruamel.yaml` to [pixi.toml](pixi.toml).
+### 10. Add per-agent timing and metadata capture -- DONE
 
-**Files:** [arena/state.py](arena/state.py), [pixi.toml](pixi.toml)
-
-### 9. Redesign archive naming
-
-**Problem:** Both `solve` and `analysis` get phase number `01` (misleading). Agent letters (`a`, `b`, `c`) are less readable than model names.
-
-**Current:** `{round:02d}-{phase:02d}-{type}-{letter}-{model}-{uid}.md`
-
-**Proposed:** Drop the phase number entirely; use phase name for sorting (solve < evaluate < revise < verify alphabetically is wrong, so use a padded prefix): `{round:02d}-{phase_name}-{model}-{artifact_type}-{uid}.md`
-
-Or simpler: just replace phase numbers with names: `00-solve-opus-solution-a1b2c3.md`, `00-solve-opus-analysis-a1b2c3.md`, `00-evaluate-gpt-critique-d4e5f6.md`.
-
-**File:** [arena/orchestrator.py](arena/orchestrator.py) `_archive_round()`
-
-### 10. Add per-agent timing and metadata capture
-
-**Problem:** No per-agent timing in status output; useful metadata (`summary`, `linesAdded`, `filesChanged`) from the API is discarded.
-
-**Fix:**
-
-- Add `agent_timing: dict[str, dict[str, float]]` to `ArenaState` (start/end per phase).
-- After each `wait_for_agent`/`wait_for_followup`, record `time.time()`.
-- Capture `linesAdded`, `filesChanged`, `summary` from `api.status()` response into a new `agent_metadata` field.
-- Show timing in `status` command output.
-
-**Files:** [arena/state.py](arena/state.py), [arena/phases.py](arena/phases.py), [arena/__main__.py](arena/__main__.py) `status` command
+Added `agent_timing` and `agent_metadata` fields to `ArenaState`. `_record_timing_start/_end` and `_capture_agent_metadata` helpers in `phases.py`. Status command displays timing and metadata.
 
 ---
 
 ## Execution Order
 
-The items have natural dependencies:
+Items 1-4 and 7-10 are already implemented. The remaining work:
 
-1. **Bug fix 1** (wait_for_followup race) -- standalone, test immediately
-2. **Bug fix 2** (persist verdict on CONTINUE) -- standalone, small
-3. **Bug fix 3** (branch names from status) -- standalone, small
-4. **Verdict extraction** (#4) -- builds on fix 1
-5. **Log model names** (#7) -- standalone, small
-6. **Per-agent timing** (#10) -- standalone, medium
-7. **Archive naming** (#9) -- standalone, small
-8. **YAML state** (#8) -- standalone, medium, new dependency
-9. **Branch files as critique source** (#5) -- builds on fix 3, largest change
-10. **Multi-agent voting** (#6) -- builds on #5, largest redesign
+1. **`arena/git.py`** -- new module for fetching files from branches via `gh` CLI
+2. **State changes** -- collapse to 3 phases, add voting fields, remove single-judge fields, add `arena_number`
+3. **Extraction changes** -- `VoteVerdict` + `parse_vote_verdict_json`, remove old verdict code
+4. **Prompt overhaul** -- all 3 phase templates with file paths, alias injection, commit convention
+5. **Phase rewrites** -- file-based extraction, merged evaluate+verify, delete `step_verify`
+6. **Orchestrator updates** -- 3-phase handlers, archive naming with phase numbers, vote breakdown in report
+7. **CLI updates** -- remove `--paste-solutions`, add `arena_number`, vote display in status
+8. **Test updates** -- across all test files
