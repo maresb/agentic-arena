@@ -1,7 +1,7 @@
 """CLI entry point for the Agentic Arena.
 
 Usage:
-    python -m arena init   --task "..." --repo owner/repo [options]
+    python -m arena init   [--task "..."] [--repo owner/repo] [options]
     python -m arena run    [--arena-dir arena]
     python -m arena step   [--arena-dir arena]
     python -m arena status [--arena-dir arena]
@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
+from arena.git import default_repo_from_remote  # noqa: E402
 from arena.orchestrator import (  # noqa: E402
     arena_number_from_dir,
     generate_final_report,
@@ -27,7 +28,7 @@ from arena.orchestrator import (  # noqa: E402
     run_orchestrator,
     step_once,
 )
-from arena.state import init_state, load_state, save_state  # noqa: E402
+from arena.state import TASK_PLACEHOLDER, init_state, load_state, save_state  # noqa: E402
 
 app = typer.Typer(
     name="arena",
@@ -71,8 +72,20 @@ def _setup_logging(arena_dir: str, *, verbose: bool = False) -> None:
 
 @app.command()
 def init(
-    task: Annotated[str, typer.Option(help="Task description for the agents to solve")],
-    repo: Annotated[str, typer.Option(help="GitHub repository (owner/repo format)")],
+    task: Annotated[
+        str,
+        typer.Option(
+            help="Task description for the agents to solve. "
+            f"Defaults to '{TASK_PLACEHOLDER}'."
+        ),
+    ] = TASK_PLACEHOLDER,
+    repo: Annotated[
+        str | None,
+        typer.Option(
+            help="GitHub repository (owner/repo format). "
+            "Defaults to the 'origin' remote of the current git repo."
+        ),
+    ] = None,
     base_branch: Annotated[str, typer.Option(help="Base branch to work from")] = "main",
     max_rounds: Annotated[int, typer.Option(help="Maximum evaluate-revise rounds")] = 3,
     verify_commands: Annotated[
@@ -100,7 +113,19 @@ def init(
 
     When ``--arena-dir`` is omitted, a new sequentially-numbered
     directory under ``arenas/`` is created automatically.
+
+    When ``--repo`` is omitted, the ``origin`` remote URL of the
+    current git repository is used (supports HTTPS and SSH formats).
     """
+    if repo is None:
+        repo = default_repo_from_remote()
+        if repo is None:
+            typer.echo(
+                "Could not detect a GitHub remote. "
+                "Please specify --repo owner/repo explicitly."
+            )
+            raise typer.Exit(code=1)
+        typer.echo(f"Detected repo from origin remote: {repo}")
     if arena_dir is None:
         arena_dir = next_arena_dir()
     parsed_commands = verify_commands.split(",") if verify_commands else None
@@ -159,6 +184,16 @@ def run(
     When ``--arena-dir`` is omitted, uses the latest arena directory.
     """
     arena_dir = _resolve_arena_dir(arena_dir)
+
+    state_path = os.path.join(arena_dir, "state.yaml")
+    pre_state = load_state(state_path)
+    if pre_state is not None and pre_state.config.task == TASK_PLACEHOLDER:
+        typer.echo(
+            f"Task is still set to the placeholder ({TASK_PLACEHOLDER!r}).\n"
+            "Please edit state.yaml to describe the actual task before running."
+        )
+        raise typer.Exit(code=1)
+
     _setup_logging(arena_dir, verbose=verbose)
     run_orchestrator(arena_dir=arena_dir)
 
@@ -183,6 +218,12 @@ def step(
     before = load_state(state_path)
     if before is None:
         typer.echo(f"No arena state found at {state_path}")
+        raise typer.Exit(code=1)
+    if before.config.task == TASK_PLACEHOLDER:
+        typer.echo(
+            f"Task is still set to the placeholder ({TASK_PLACEHOLDER!r}).\n"
+            "Please edit state.yaml to describe the actual task before stepping."
+        )
         raise typer.Exit(code=1)
     if before.completed:
         typer.echo("Arena is already completed. Nothing to do.")

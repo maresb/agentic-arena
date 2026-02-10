@@ -2,11 +2,12 @@
 
 import os
 import tempfile
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from arena.__main__ import app
-from arena.state import init_state, load_state, save_state
+from arena.state import TASK_PLACEHOLDER, init_state, load_state, save_state
 
 runner = CliRunner()
 
@@ -172,6 +173,46 @@ class TestInitModelsFlag:
             assert state.config.arena_number == 42
 
 
+class TestInitDefaults:
+    @patch("arena.__main__.default_repo_from_remote", return_value="detected/repo")
+    def test_defaults_task_placeholder(self, _mock_remote: object) -> None:
+        """init with no --task defaults to the placeholder."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                ["init", "--arena-dir", tmpdir],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
+            assert state is not None
+            assert state.config.task == TASK_PLACEHOLDER
+
+    @patch("arena.__main__.default_repo_from_remote", return_value="detected/repo")
+    def test_defaults_repo_from_remote(self, _mock_remote: object) -> None:
+        """init with no --repo detects the origin remote."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                ["init", "--task", "my task", "--arena-dir", tmpdir],
+            )
+            assert result.exit_code == 0
+            assert "Detected repo from origin remote" in result.output
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
+            assert state is not None
+            assert state.config.repo == "detected/repo"
+
+    @patch("arena.__main__.default_repo_from_remote", return_value=None)
+    def test_fails_when_no_remote_and_no_repo(self, _mock_remote: object) -> None:
+        """init fails gracefully when no remote is detected and --repo is omitted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                ["init", "--task", "my task", "--arena-dir", tmpdir],
+            )
+            assert result.exit_code == 1
+            assert "Could not detect" in result.output
+
+
 class TestStepCommand:
     def test_missing_state_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -188,6 +229,26 @@ class TestStepCommand:
             result = runner.invoke(app, ["step", "--arena-dir", tmpdir])
             assert result.exit_code == 0
             assert "already completed" in result.output
+
+    def test_balks_at_placeholder_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task=TASK_PLACEHOLDER, repo="r")
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+            result = runner.invoke(app, ["step", "--arena-dir", tmpdir])
+            assert result.exit_code == 1
+            assert "placeholder" in result.output
+
+
+class TestRunCommand:
+    def test_balks_at_placeholder_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task=TASK_PLACEHOLDER, repo="r")
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+            result = runner.invoke(app, ["run", "--arena-dir", tmpdir])
+            assert result.exit_code == 1
+            assert "placeholder" in result.output
 
 
 class TestStatusCommand:
