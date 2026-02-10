@@ -85,11 +85,11 @@ def init(
             help="Comma-separated model list (e.g. opus,gpt). Defaults to all."
         ),
     ] = None,
-    branch_only: Annotated[
+    paste_solutions: Annotated[
         bool,
         typer.Option(
-            "--branch-only",
-            help="Omit pasted solutions in prompts; agents must git fetch branches.",
+            "--paste-solutions/--no-paste-solutions",
+            help="Paste full solution text into prompts instead of agents git fetching each others' branches.",
         ),
     ] = False,
     verify_mode: Annotated[
@@ -118,7 +118,7 @@ def init(
         max_rounds=max_rounds,
         verify_commands=parsed_commands,
         models=parsed_models,
-        branch_only=branch_only,
+        paste_solutions=paste_solutions,
         verify_mode=verify_mode,
     )
     state_path = os.path.join(arena_dir, "state.yaml")

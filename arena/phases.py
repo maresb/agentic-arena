@@ -241,7 +241,7 @@ def step_evaluate(
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
 
-        if state.config.branch_only and state.branch_names:
+        if not state.config.paste_solutions and state.branch_names:
             others = [
                 (k, "(See branch — use git fetch to inspect)")
                 for k in state.solutions

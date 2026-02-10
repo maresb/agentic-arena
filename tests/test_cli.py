@@ -128,7 +128,7 @@ class TestInitModelsFlag:
             assert state is not None
             assert len(state.alias_mapping) == 2
 
-    def test_branch_only_flag(self) -> None:
+    def test_paste_solutions_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(
                 app,
@@ -138,7 +138,6 @@ class TestInitModelsFlag:
                     "test",
                     "--repo",
                     "r",
-                    "--branch-only",
                     "--arena-dir",
                     tmpdir,
                 ],
@@ -146,7 +145,27 @@ class TestInitModelsFlag:
             assert result.exit_code == 0
             state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
-            assert state.config.branch_only is True
+            assert state.config.paste_solutions is False
+
+    def test_paste_solutions_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--paste-solutions",
+                    "--arena-dir",
+                    tmpdir,
+                ],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
+            assert state is not None
+            assert state.config.paste_solutions is True
 
     def test_verify_mode_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

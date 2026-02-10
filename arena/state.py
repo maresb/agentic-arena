@@ -84,7 +84,7 @@ class ArenaConfig(BaseModel, frozen=True):
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
-    branch_only: bool = False
+    paste_solutions: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
     context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
 
@@ -417,7 +417,7 @@ def init_state(
     max_rounds: int = 3,
     verify_commands: list[str] | None = None,
     models: list[str] | None = None,
-    branch_only: bool = False,
+    paste_solutions: bool = False,
     verify_mode: str = "advisory",
 ) -> ArenaState:
     """Create a fresh arena state with randomized alias-to-model mapping.
@@ -440,7 +440,7 @@ def init_state(
         max_rounds=max_rounds,
         verify_commands=verify_commands or [],
         models=model_list,
-        branch_only=branch_only,
+        paste_solutions=paste_solutions,
         verify_mode=verify_mode,
     )
 

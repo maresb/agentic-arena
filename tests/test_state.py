@@ -251,9 +251,13 @@ class TestCustomModels:
         state = init_state(task="test", repo="r", models=["opus", "gpt"])
         assert len(state.config.models) == 2
 
-    def test_branch_only_config(self) -> None:
-        state = init_state(task="test", repo="r", branch_only=True)
-        assert state.config.branch_only is True
+    def test_paste_solutions_default(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.config.paste_solutions is False
+
+    def test_paste_solutions_opt_in(self) -> None:
+        state = init_state(task="test", repo="r", paste_solutions=True)
+        assert state.config.paste_solutions is True
 
     def test_verify_mode_config(self) -> None:
         state = init_state(task="test", repo="r", verify_mode="gating")
