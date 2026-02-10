@@ -390,10 +390,11 @@ def save_state(state: ArenaState, path: str = "arena/state.yaml") -> None:
     if path.endswith(".json"):
         serialized = json.dumps(dump, indent=2)
     else:
-        # Use literal block scalar (|) for the task field when it contains
-        # newlines, so multiline tasks are human-readable in the YAML file.
+        # Always use literal block scalar (| / |-) for the task field so
+        # it is easy to edit in the YAML file and avoids quoting issues
+        # with characters like '[' that are YAML syntax.
         task_val = dump.get("config", {}).get("task", "")
-        if "\n" in task_val:
+        if task_val:
             dump["config"]["task"] = LiteralScalarString(task_val)
         yaml = _yaml_instance()
         stream = StringIO()

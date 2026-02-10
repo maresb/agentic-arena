@@ -267,15 +267,19 @@ class TestSaveAndLoad:
             assert loaded is not None
             assert loaded.config.task == multiline_task
 
-    def test_yaml_singleline_task_stays_inline(self) -> None:
-        """Single-line tasks are serialized inline (no block scalar)."""
+    def test_yaml_singleline_task_uses_block_scalar(self) -> None:
+        """Even single-line tasks use literal block scalar for editability."""
         state = init_state(task="Simple task", repo="owner/repo")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "state.yaml")
             save_state(state, path)
             with open(path) as f:
                 content = f.read()
-            assert "task: Simple task" in content
+            # Should use |- (literal strip) for single-line values
+            assert "task: |-" in content or "task: |" in content
+            loaded = load_state(path)
+            assert loaded is not None
+            assert loaded.config.task == "Simple task"
 
 
 class TestExpectedPath:
