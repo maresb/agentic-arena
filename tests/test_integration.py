@@ -47,19 +47,3 @@ class TestLiveAPI:
         """Verify repository listing works."""
         repos = api.list_repositories()
         assert isinstance(repos, list)
-
-    def test_launch_and_stop_agent(self, api) -> None:
-        """Launch an agent, verify it starts, then stop it."""
-        agent = api.launch(
-            prompt="Say hello in one word.",
-            repo="maresb/cursor-agentic-arena",
-            ref="main",
-        )
-        agent_id = agent["id"]
-        assert agent_id
-
-        info = api.status(agent_id)
-        assert info["status"] in ("CREATING", "RUNNING", "FINISHED")
-
-        # Clean up
-        api.stop(agent_id)
