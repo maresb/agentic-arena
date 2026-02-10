@@ -86,7 +86,7 @@ def fetch_file_from_branch(
     api_path = f"/repos/{owner}/{name}/contents/{path}"
     try:
         result = subprocess.run(
-            ["gh", "api", api_path, "-f", f"ref={branch}"],
+            ["gh", "api", "-X", "GET", api_path, "-f", f"ref={branch}"],
             capture_output=True,
             text=True,
             timeout=timeout,
