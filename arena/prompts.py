@@ -67,13 +67,12 @@ def solve_prompt(
 # ---------------------------------------------------------------------------
 
 EVALUATE_TEMPLATE = """\
-You are {alias}. Read these solutions from all agents:
+You are {alias}. Read the solutions and analyses from all agents by
+fetching them from their branches. Use `git show` to read each file:
 
-{solutions_block}
+{references_block}
 
-And these self-reported analyses:
-
-{analyses_block}
+Read ALL files listed above before writing your critique.
 
 Your task has two parts:
 
@@ -113,39 +112,33 @@ Commit both files:
 
 def evaluate_prompt(
     alias: str,
-    solutions: list[tuple[str, str]],
-    analyses: list[tuple[str, str]],
+    agent_files: list[tuple[str, str, str, str]],
     arena_number: int,
     round_num: int,
 ) -> str:
-    """Generate the evaluate prompt with shuffled presentation order.
+    """Generate the evaluate prompt with branch file references.
 
     Parameters
     ----------
     alias:
         The alias of the agent receiving this prompt.
-    solutions:
-        List of (alias, solution_text) tuples for ALL agents.
-    analyses:
-        List of (alias, analysis_text) tuples for ALL agents.
+    agent_files:
+        List of (alias, branch, solution_path, analysis_path) tuples
+        for ALL agents.
     """
-    shuffled_solutions = list(solutions)
-    random.shuffle(shuffled_solutions)
+    shuffled = list(agent_files)
+    random.shuffle(shuffled)
 
-    sol_blocks = []
-    for sol_alias, solution in shuffled_solutions:
-        label = sol_alias.replace("_", " ").upper()
-        sol_blocks.append(f"=== {label} SOLUTION ===\n{solution}")
-    solutions_block = "\n\n".join(sol_blocks)
-
-    # Keep analysis order matching the shuffled solution order
-    analyses_dict = dict(analyses)
-    ana_blocks = []
-    for sol_alias, _ in shuffled_solutions:
-        label = sol_alias.replace("_", " ").upper()
-        ana_text = analyses_dict.get(sol_alias, "N/A")
-        ana_blocks.append(f"=== {label} ANALYSIS ===\n{ana_text}")
-    analyses_block = "\n\n".join(ana_blocks)
+    ref_blocks = []
+    for ref_alias, branch, sol_path, ana_path in shuffled:
+        label = ref_alias.replace("_", " ").upper()
+        ref_blocks.append(
+            f"=== {label} ===\n"
+            f"  Branch: {branch}\n"
+            f"  Solution: git show origin/{branch}:{sol_path}\n"
+            f"  Analysis: git show origin/{branch}:{ana_path}"
+        )
+    references_block = "\n\n".join(ref_blocks)
 
     critique_path = expected_path(
         arena_number, round_num, "evaluate", alias, "critique"
@@ -157,8 +150,7 @@ def evaluate_prompt(
 
     return EVALUATE_TEMPLATE.format(
         alias=alias,
-        solutions_block=solutions_block,
-        analyses_block=analyses_block,
+        references_block=references_block,
         critique_path=critique_path,
         verdict_path=verdict_path,
         commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
@@ -170,11 +162,15 @@ def evaluate_prompt(
 # ---------------------------------------------------------------------------
 
 REVISE_TEMPLATE = """\
-You are {alias}. Here is how all agents were critiqued:
+You are {alias}. Read all agents' critiques by fetching them from their
+branches. Use `git show` to read each file:
 
-{critiques_block}
+{references_block}
 
-Produce your REVISED solution, incorporating the strongest elements.
+Read ALL critiques listed above before writing your revised solution.
+
+Produce your REVISED solution, incorporating the strongest elements
+from the feedback.
 
 Commit your revised response as two files:
   {solution_path}
@@ -192,26 +188,31 @@ Commit your revised response as two files:
 
 def revise_prompt(
     alias: str,
-    all_critiques: list[tuple[str, str]],
+    agent_critique_files: list[tuple[str, str, str]],
     arena_number: int,
     round_num: int,
 ) -> str:
-    """Generate the revise prompt with shuffled critique order.
+    """Generate the revise prompt with branch file references.
 
     Parameters
     ----------
     alias:
         The alias of the agent receiving this prompt.
-    all_critiques:
-        List of (alias, critique_text) tuples for all agents.
+    agent_critique_files:
+        List of (alias, branch, critique_path) tuples for all agents.
     """
-    shuffled = list(all_critiques)
+    shuffled = list(agent_critique_files)
     random.shuffle(shuffled)
-    blocks = []
-    for crit_alias, critique in shuffled:
+
+    ref_blocks = []
+    for crit_alias, branch, crit_path in shuffled:
         label = crit_alias.replace("_", " ").upper()
-        blocks.append(f"=== CRITIQUE BY {label} ===\n{critique}")
-    critiques_block = "\n\n".join(blocks)
+        ref_blocks.append(
+            f"=== CRITIQUE BY {label} ===\n"
+            f"  Branch: {branch}\n"
+            f"  Critique: git show origin/{branch}:{crit_path}"
+        )
+    references_block = "\n\n".join(ref_blocks)
 
     solution_path = expected_path(arena_number, round_num, "revise", alias, "solution")
     analysis_path = expected_path(arena_number, round_num, "revise", alias, "analysis")
@@ -219,7 +220,7 @@ def revise_prompt(
 
     return REVISE_TEMPLATE.format(
         alias=alias,
-        critiques_block=critiques_block,
+        references_block=references_block,
         solution_path=solution_path,
         analysis_path=analysis_path,
         commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),

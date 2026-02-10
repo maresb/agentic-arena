@@ -322,9 +322,16 @@ def step_evaluate(
     anum = state.config.arena_number
     rnd = state.round
 
-    # Build solutions and analyses for the prompt (all agents, including self)
-    all_solutions = list(state.solutions.items())
-    all_analyses = list(state.analyses.items())
+    # Determine the phase name whose files we're evaluating
+    eval_phase = "solve" if rnd == 0 else "revise"
+
+    # Build branch file references for all agents
+    agent_files: list[tuple[str, str, str, str]] = []
+    for a in state.alias_mapping:
+        branch = state.branch_names.get(a, "")
+        sol_path = expected_path(anum, rnd, eval_phase, a, "solution")
+        ana_path = expected_path(anum, rnd, eval_phase, a, "analysis")
+        agent_files.append((a, branch, sol_path, ana_path))
 
     # Send follow-ups to all agents
     for alias in state.alias_mapping:
@@ -352,7 +359,7 @@ def step_evaluate(
 
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=evaluate_prompt(alias, all_solutions, all_analyses, anum, rnd),
+            prompt=evaluate_prompt(alias, agent_files, anum, rnd),
         )
 
     # Wait for all SENT agents
@@ -525,12 +532,17 @@ def step_revise(
     anum = state.config.arena_number
     rnd = state.round
 
+    # Build branch file references for critiques
+    agent_critique_files: list[tuple[str, str, str]] = []
+    for a in state.alias_mapping:
+        branch = state.branch_names.get(a, "")
+        crit_path = expected_path(anum, rnd, "evaluate", a, "critique")
+        agent_critique_files.append((a, branch, crit_path))
+
     # Send follow-ups
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-
-        all_critiques = list(state.critiques.items())
 
         if state.phase_progress.get(alias) == ProgressStatus.SENT:
             current_count = len(api.get_conversation(state.agent_ids[alias]))
@@ -552,7 +564,7 @@ def step_revise(
 
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=revise_prompt(alias, all_critiques, anum, rnd),
+            prompt=revise_prompt(alias, agent_critique_files, anum, rnd),
         )
 
     # Wait for all SENT agents
