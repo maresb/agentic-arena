@@ -93,7 +93,7 @@ PART 2 — VERDICT (commit to {verdict_path})
 {verdict_path} must be valid JSON with this exact schema:
 {{
   "convergence_score": <1-10>,
-  "best_solutions": [<aliases excluding your own ({alias}), at least one required>],
+  "best_solutions": [<aliases exactly as written (e.g. "agent_a"), excluding your own ({alias}), at least one required>],
   "remaining_disagreements": <count>,
   "rationale": "<why these solutions are best / what still differs>"
 }}

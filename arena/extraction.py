@@ -29,7 +29,18 @@ class VoteVerdict(BaseModel):
     rationale: str | None = None
 
 
-def parse_vote_verdict_json(text: str) -> VoteVerdict:
+def _normalize_alias(raw: str) -> str:
+    """Normalize a vote target to the canonical alias form.
+
+    Agents sometimes write ``"Agent A"`` instead of ``"agent_a"``.
+    Convert to lowercase and replace spaces with underscores.
+    """
+    return raw.strip().lower().replace(" ", "_")
+
+
+def parse_vote_verdict_json(
+    text: str, *, valid_aliases: frozenset[str] | None = None
+) -> VoteVerdict:
     """Parse a vote verdict from JSON text.
 
     Primary path: ``json.loads(text)`` directly (for file content fetched
@@ -38,14 +49,31 @@ def parse_vote_verdict_json(text: str) -> VoteVerdict:
     Fallback: extract JSON from a fenced ``json`` code block in
     conversation text, then parse.
 
+    Aliases in ``best_solutions`` are normalized (lowered, spaces →
+    underscores).  If *valid_aliases* is provided, entries that don't
+    match any known alias after normalization are dropped with a warning.
+
     Returns a :class:`VoteVerdict` with whatever fields could be parsed.
     On complete failure, returns a default (empty) verdict.
     """
+
+    def _validate(data: dict) -> VoteVerdict:
+        verdict = VoteVerdict.model_validate(data)
+        normalized = [_normalize_alias(a) for a in verdict.best_solutions]
+        if valid_aliases is not None:
+            kept = [a for a in normalized if a in valid_aliases]
+            dropped = [a for a in normalized if a not in valid_aliases]
+            if dropped:
+                logger.warning("Dropped unknown vote targets: %s", dropped)
+            normalized = kept
+        verdict.best_solutions = normalized
+        return verdict
+
     # ── Primary: direct JSON parse ──
     try:
         data = json.loads(text)
         if isinstance(data, dict):
-            return VoteVerdict.model_validate(data)
+            return _validate(data)
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -58,7 +86,7 @@ def parse_vote_verdict_json(text: str) -> VoteVerdict:
             data = json.loads(match.group(1))
             if isinstance(data, dict):
                 logger.info("Parsed verdict from fenced JSON code block")
-                return VoteVerdict.model_validate(data)
+                return _validate(data)
         except (json.JSONDecodeError, ValueError):
             pass
 

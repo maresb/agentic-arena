@@ -126,6 +126,40 @@ class TestParseVoteVerdictJson:
         verdict = parse_vote_verdict_json("")
         assert verdict.convergence_score is None
 
+    def test_normalizes_alias_casing_and_spaces(self) -> None:
+        """'Agent A' should become 'agent_a'."""
+        text = json.dumps(
+            {
+                "convergence_score": 8,
+                "best_solutions": ["Agent A", "Agent B"],
+            }
+        )
+        verdict = parse_vote_verdict_json(text)
+        assert verdict.best_solutions == ["agent_a", "agent_b"]
+
+    def test_valid_aliases_filter(self) -> None:
+        text = json.dumps(
+            {
+                "convergence_score": 7,
+                "best_solutions": ["agent_a", "unknown_agent"],
+            }
+        )
+        valid = frozenset(["agent_a", "agent_b", "agent_c"])
+        verdict = parse_vote_verdict_json(text, valid_aliases=valid)
+        assert verdict.best_solutions == ["agent_a"]
+
+    def test_valid_aliases_with_normalization(self) -> None:
+        """'Agent C' → 'agent_c' which IS in valid set."""
+        text = json.dumps(
+            {
+                "convergence_score": 9,
+                "best_solutions": ["Agent C"],
+            }
+        )
+        valid = frozenset(["agent_a", "agent_b", "agent_c"])
+        verdict = parse_vote_verdict_json(text, valid_aliases=valid)
+        assert verdict.best_solutions == ["agent_c"]
+
 
 # ---------------------------------------------------------------------------
 # is_assistant_message

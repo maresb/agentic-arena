@@ -411,7 +411,10 @@ def step_evaluate(
                 verdict_path,
             )
 
-        verdict = parse_vote_verdict_json(verdict_text or "")
+        valid_aliases = frozenset(state.alias_mapping)
+        verdict = parse_vote_verdict_json(
+            verdict_text or "", valid_aliases=valid_aliases
+        )
 
         # Strip self-votes silently
         if alias in verdict.best_solutions:
