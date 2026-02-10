@@ -6,89 +6,11 @@ import pytest
 
 from arena.extraction import (
     FILE_COMMIT_RETRY_PROMPT,
-    RETRY_PROMPT,
     VoteVerdict,
     extract_latest_response,
-    extract_solution_and_analysis,
-    extract_xml_section,
     is_assistant_message,
     parse_vote_verdict_json,
 )
-
-
-# ---------------------------------------------------------------------------
-# extract_xml_section
-# ---------------------------------------------------------------------------
-
-
-class TestExtractXmlSection:
-    def test_basic_extraction(self) -> None:
-        text = "preamble\n<solution>\nmy solution\n</solution>\npostamble"
-        assert extract_xml_section(text, "solution") == "my solution"
-
-    def test_multiline_content(self) -> None:
-        text = "<analysis>\nline 1\nline 2\nline 3\n</analysis>"
-        result = extract_xml_section(text, "analysis")
-        assert result == "line 1\nline 2\nline 3"
-
-    def test_missing_tag_returns_none(self) -> None:
-        assert extract_xml_section("no tags here", "solution") is None
-
-    def test_whitespace_stripping(self) -> None:
-        text = "<solution>  \n  content  \n  </solution>"
-        assert extract_xml_section(text, "solution") == "content"
-
-    def test_empty_content(self) -> None:
-        text = "<solution></solution>"
-        assert extract_xml_section(text, "solution") == ""
-
-
-# ---------------------------------------------------------------------------
-# extract_solution_and_analysis
-# ---------------------------------------------------------------------------
-
-
-class TestExtractSolutionAndAnalysis:
-    def test_both_present(self) -> None:
-        conversation = [
-            {"role": "user", "content": "do something"},
-            {
-                "role": "assistant",
-                "content": (
-                    "Here is my work:\n"
-                    "<solution>\n## PLAN\nStep 1\n## CHANGES\nDiff here\n</solution>\n"
-                    "<analysis>\n## RISKS\nNone\n## OPEN QUESTIONS\nNone\n</analysis>"
-                ),
-            },
-        ]
-        solution, analysis = extract_solution_and_analysis(conversation)
-        assert "## PLAN" in solution
-        assert "Step 1" in solution
-        assert "## RISKS" in analysis
-
-    def test_missing_solution_uses_full_response(self) -> None:
-        conversation = [
-            {"role": "assistant", "content": "Just a plain response"},
-        ]
-        solution, analysis = extract_solution_and_analysis(conversation)
-        assert solution == "Just a plain response"
-        assert analysis == ""
-
-    def test_missing_analysis_returns_empty(self) -> None:
-        conversation = [
-            {
-                "role": "assistant",
-                "content": "<solution>my solution</solution>",
-            },
-        ]
-        solution, analysis = extract_solution_and_analysis(conversation)
-        assert solution == "my solution"
-        assert analysis == ""
-
-    def test_no_assistant_message_raises(self) -> None:
-        conversation = [{"role": "user", "content": "hello"}]
-        with pytest.raises(ValueError, match="No assistant message"):
-            extract_solution_and_analysis(conversation)
 
 
 # ---------------------------------------------------------------------------
@@ -232,21 +154,6 @@ class TestIsAssistantMessage:
 class TestRealApiFormatExtraction:
     """Test extraction with the real Cloud Agents API format (type/text)."""
 
-    def test_extract_solution_from_api_format(self) -> None:
-        conversation = [
-            {"type": "user_message", "text": "do something"},
-            {
-                "type": "assistant_message",
-                "text": (
-                    "<solution>\n## PLAN\nStep 1\n</solution>\n"
-                    "<analysis>\n## RISKS\nNone\n</analysis>"
-                ),
-            },
-        ]
-        solution, analysis = extract_solution_and_analysis(conversation)
-        assert "## PLAN" in solution
-        assert "## RISKS" in analysis
-
     def test_extract_latest_response_api_format(self) -> None:
         conversation = [
             {"type": "assistant_message", "text": "first"},
@@ -259,11 +166,6 @@ class TestRealApiFormatExtraction:
 # ---------------------------------------------------------------------------
 # Prompt constants
 # ---------------------------------------------------------------------------
-
-
-def test_retry_prompt_is_defined() -> None:
-    assert "<solution>" in RETRY_PROMPT
-    assert "<analysis>" in RETRY_PROMPT
 
 
 def test_file_commit_retry_prompt_is_defined() -> None:

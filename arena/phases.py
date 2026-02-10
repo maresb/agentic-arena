@@ -24,10 +24,7 @@ from arena.api import (
 )
 from arena.extraction import (
     FILE_COMMIT_RETRY_PROMPT,
-    RETRY_PROMPT,
     extract_latest_response,
-    extract_solution_and_analysis,
-    extract_xml_section,
     parse_vote_verdict_json,
 )
 from arena.git import fetch_file_from_branch
@@ -159,79 +156,52 @@ def _fetch_with_retry(
     api: CursorCloudAPI,
     *,
     commit_desc: str,
+    max_retries: int = 3,
 ) -> str | None:
-    """Fetch a file from an agent's branch, re-prompting once if missing.
+    """Fetch a file from an agent's branch, re-prompting if missing.
 
-    1. Try to fetch the file.
-    2. If not found, send a re-prompt follow-up and wait.
-    3. Try to fetch again.
-    4. Return content or None (caller falls back to conversation extraction).
+    Retries up to *max_retries* times, sending a follow-up each time
+    asking the agent to commit the expected file.  Returns the file
+    content on success, or ``None`` if all retries are exhausted.
     """
     content = _fetch_agent_file(state, alias, file_path)
     if content is not None:
         return content
 
-    # If we don't have a branch name for this agent, we can't fetch files
-    # at all — skip the retry and let the caller fall back to conversation.
-    if not state.branch_names.get(alias):
-        return None
-
-    # Re-prompt the agent to commit the file
+    branch = state.branch_names.get(alias)
     agent_id = state.agent_ids.get(alias)
-    if not agent_id:
+    if not branch or not agent_id:
         return None
 
-    logger.warning(
-        "File %s not found on %s branch; re-prompting",
-        file_path,
-        agent_label(alias, state),
-    )
-    prev_count = len(api.get_conversation(agent_id))
-    api.followup(
-        agent_id=agent_id,
-        prompt=FILE_COMMIT_RETRY_PROMPT.format(
-            expected_path=file_path,
-            commit_desc=commit_desc,
-        ),
-    )
-    wait_for_followup(api, agent_id, prev_count)
-
-    # Try again
-    return _fetch_agent_file(state, alias, file_path)
-
-
-def _extract_with_retry(
-    api: CursorCloudAPI,
-    agent_id: str,
-    conversation: list[dict],
-    *,
-    max_retries: int = 1,
-) -> tuple[str, str]:
-    """Extract solution/analysis from conversation, re-prompting if XML tags missing.
-
-    This is the conversation fallback path, used when branch file
-    fetching fails.
-    """
-    solution, analysis = extract_solution_and_analysis(conversation)
-
-    for attempt in range(max_retries):
-        text = conversation[-1].get("content") or conversation[-1].get("text", "")
-        if extract_xml_section(text, "solution") is not None:
-            break
-
+    for attempt in range(1, max_retries + 1):
         logger.warning(
-            "No <solution> tag in agent %s response (attempt %d/%d), re-prompting",
-            agent_id,
-            attempt + 1,
+            "File %s not found on %s branch (attempt %d/%d); re-prompting",
+            file_path,
+            agent_label(alias, state),
+            attempt,
             max_retries,
         )
-        prev_count = len(conversation)
-        api.followup(agent_id=agent_id, prompt=RETRY_PROMPT)
+        prev_count = len(api.get_conversation(agent_id))
+        api.followup(
+            agent_id=agent_id,
+            prompt=FILE_COMMIT_RETRY_PROMPT.format(
+                expected_path=file_path,
+                commit_desc=commit_desc,
+            ),
+        )
         wait_for_followup(api, agent_id, prev_count)
-        conversation = api.get_conversation(agent_id)
-        solution, analysis = extract_solution_and_analysis(conversation)
 
-    return solution, analysis
+        content = _fetch_agent_file(state, alias, file_path)
+        if content is not None:
+            return content
+
+    logger.error(
+        "File %s not committed by %s after %d retries",
+        file_path,
+        agent_label(alias, state),
+        max_retries,
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +267,7 @@ def step_solve(
             )
     _save()
 
-    # Extract content: prefer branch files, fall back to conversation
+    # Extract content from committed branch files
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
@@ -311,26 +281,18 @@ def step_solve(
         )
         analysis = _fetch_agent_file(state, alias, ana_path)
 
-        if solution is None:
-            # Conversation fallback
-            logger.info(
-                "Falling back to conversation extraction for %s",
-                agent_label(alias, state),
-            )
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-            solution, analysis_fallback = _extract_with_retry(
-                api, state.agent_ids[alias], conversation
-            )
-            if analysis is None:
-                analysis = analysis_fallback
-        else:
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-
+        conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
         _save_conversation(state, state_path, alias, conversation)
 
-        state.solutions[alias] = solution
+        if solution is None:
+            logger.error(
+                "No solution from %s; agent did not commit %s",
+                agent_label(alias, state),
+                sol_path,
+            )
+
+        state.solutions[alias] = solution or ""
         state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "solve")
@@ -417,27 +379,32 @@ def step_evaluate(
         critique = _fetch_with_retry(
             state, alias, critique_path, api, commit_desc=commit_desc
         )
-        if critique is None:
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-            critique = extract_latest_response(conversation)
-        else:
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-
-        _save_conversation(state, state_path, alias, conversation)
-
-        state.critiques[alias] = critique
 
         # ── Verdict extraction ──
         verdict_text = _fetch_with_retry(
             state, alias, verdict_path, api, commit_desc=commit_desc
         )
-        if verdict_text is None:
-            # Conversation fallback: try to parse JSON from the response
-            verdict_text = extract_latest_response(conversation)
 
-        verdict = parse_vote_verdict_json(verdict_text)
+        conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
+        _save_conversation(state, state_path, alias, conversation)
+
+        if critique is None:
+            logger.error(
+                "No critique from %s; agent did not commit %s",
+                agent_label(alias, state),
+                critique_path,
+            )
+        state.critiques[alias] = critique or ""
+
+        if verdict_text is None:
+            logger.error(
+                "No verdict from %s; agent did not commit %s",
+                agent_label(alias, state),
+                verdict_path,
+            )
+
+        verdict = parse_vote_verdict_json(verdict_text or "")
 
         # Strip self-votes silently
         if alias in verdict.best_solutions:
@@ -611,25 +578,18 @@ def step_revise(
         )
         analysis = _fetch_agent_file(state, alias, ana_path)
 
-        if solution is None:
-            logger.info(
-                "Falling back to conversation extraction for %s",
-                agent_label(alias, state),
-            )
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-            solution, analysis_fallback = _extract_with_retry(
-                api, state.agent_ids[alias], conversation
-            )
-            if analysis is None:
-                analysis = analysis_fallback
-        else:
-            conversation = api.get_conversation(state.agent_ids[alias])
-            _update_token_usage(state, alias, conversation)
-
+        conversation = api.get_conversation(state.agent_ids[alias])
+        _update_token_usage(state, alias, conversation)
         _save_conversation(state, state_path, alias, conversation)
 
-        state.solutions[alias] = solution
+        if solution is None:
+            logger.error(
+                "No revised solution from %s; agent did not commit %s",
+                agent_label(alias, state),
+                sol_path,
+            )
+
+        state.solutions[alias] = solution or ""
         state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "revise")
