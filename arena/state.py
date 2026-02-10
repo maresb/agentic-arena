@@ -54,8 +54,17 @@ class ProgressStatus(StrEnum):
 
 
 # Known model short names. Any string is accepted by --models; these are the
-# defaults and the keys used in the MODELS mapping in prompts.py.
+# defaults and the keys used in the DEFAULT_MODEL_NICKNAMES mapping below.
 DEFAULT_MODELS: tuple[str, ...] = ("opus", "gpt", "gemini")
+
+# Default mapping of short nicknames to full API model identifiers.
+# Used as the default value for ``model_nicknames`` in :func:`init_state`.
+# Any nickname not found in the mapping is used as-is (pass-through).
+DEFAULT_MODEL_NICKNAMES: dict[str, str] = {
+    "opus": "claude-4.6-opus-high-thinking",
+    "gpt": "gpt-5.2-codex-high",
+    "gemini": "gemini-3-pro",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +98,12 @@ class ArenaState(BaseModel):
 
     config: ArenaConfig
     alias_mapping: dict[str, str]
+
+    # Nickname → full API model name.  ``alias_mapping`` values are looked
+    # up here when the real model identifier is needed (e.g. API launch).
+    # A value not present in this dict is used as-is (pass-through).
+    model_nicknames: dict[str, str] = Field(default_factory=dict)
+
     agent_ids: dict[str, str] = Field(default_factory=dict)
     round: int = 0
     phase: Phase = Phase.SOLVE
@@ -144,6 +159,22 @@ class ArenaState(BaseModel):
     # Per-agent metadata from the API status response (summary, linesAdded,
     # filesChanged).  Captured after the solve and revise phases complete.
     agent_metadata: dict[str, dict[str, str | int]] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Model resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_model(state: ArenaState, name: str) -> str:
+    """Resolve a model nickname to its full API identifier.
+
+    Looks up *name* in ``state.model_nicknames``, falling back to *name*
+    itself when no mapping exists.  This allows ``alias_mapping`` values
+    to be either nicknames (``"opus"``) or already-full identifiers
+    (``"claude-4.6-opus-high-thinking"``).
+    """
+    return state.model_nicknames.get(name, name)
 
 
 # ---------------------------------------------------------------------------
@@ -416,5 +447,6 @@ def init_state(
     return ArenaState(
         config=config,
         alias_mapping={a: m for a, m in zip(aliases, model_list)},
+        model_nicknames=dict(DEFAULT_MODEL_NICKNAMES),
         phase_progress={a: ProgressStatus.PENDING for a in aliases},
     )

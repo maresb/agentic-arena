@@ -34,15 +34,6 @@ def _branch_hint_block(branch_names: dict[str, str] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Model identifier mapping (alias → Cursor API model name)
-# ---------------------------------------------------------------------------
-MODELS: dict[str, str] = {
-    "opus": "claude-4.6-opus-high-thinking",
-    "gpt": "gpt-5.2-codex-high",
-    "gemini": "gemini-3-pro",
-}
-
-# ---------------------------------------------------------------------------
 # Solve phase
 # ---------------------------------------------------------------------------
 SOLVE_TEMPLATE = """\

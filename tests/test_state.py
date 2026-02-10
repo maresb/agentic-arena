@@ -13,6 +13,7 @@ from arena.state import (
     _aliases_for_count,
     init_state,
     load_state,
+    resolve_model,
     save_state,
 )
 
@@ -289,3 +290,30 @@ class TestCustomModels:
         assert state.agent_metadata == {}
         state.agent_metadata["agent_a"] = {"summary": "Did stuff", "linesAdded": 42}
         assert state.agent_metadata["agent_a"]["linesAdded"] == 42
+
+    def test_model_nicknames_populated(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert state.model_nicknames
+
+
+class TestResolveModel:
+    def test_default_nicknames_resolve(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert resolve_model(state, "opus").startswith("claude-")
+        assert resolve_model(state, "gpt").startswith("gpt-")
+        assert resolve_model(state, "gemini").startswith("gemini-")
+
+    def test_falls_back_to_name(self) -> None:
+        state = init_state(task="test", repo="r")
+        assert resolve_model(state, "some-custom-model") == "some-custom-model"
+
+    def test_empty_nicknames_passes_through(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.model_nicknames = {}
+        assert resolve_model(state, "opus") == "opus"
+
+    def test_custom_nicknames(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.model_nicknames = {"mymodel": "vendor/my-model-v2"}
+        assert resolve_model(state, "mymodel") == "vendor/my-model-v2"
+        assert resolve_model(state, "other") == "other"

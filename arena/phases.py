@@ -28,13 +28,12 @@ from arena.extraction import (
     parse_verdict,
 )
 from arena.prompts import (
-    MODELS,
     evaluate_prompt,
     revise_prompt,
     solve_prompt,
     verify_prompt,
 )
-from arena.state import ArenaState, Phase, ProgressStatus, save_state
+from arena.state import ArenaState, Phase, ProgressStatus, resolve_model, save_state
 
 logger = logging.getLogger("arena")
 
@@ -160,7 +159,7 @@ def step_solve(
                 prompt=solve_prompt(state.config.task),
                 repo=state.config.repo,
                 ref=state.config.base_branch,
-                model=MODELS.get(model, model),
+                model=resolve_model(state, model),
             )
             state.agent_ids[alias] = agent["id"]
             # Capture branch name if returned by the API

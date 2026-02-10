@@ -1,13 +1,13 @@
 """Tests for prompt templates."""
 
 from arena.prompts import (
-    MODELS,
     _branch_hint_block,
     evaluate_prompt,
     revise_prompt,
     solve_prompt,
     verify_prompt,
 )
+from arena.state import DEFAULT_MODEL_NICKNAMES
 
 
 class TestSolvePrompt:
@@ -130,11 +130,11 @@ class TestBranchHints:
 
 class TestModelsMapping:
     def test_all_models_present(self) -> None:
-        assert "opus" in MODELS
-        assert "gpt" in MODELS
-        assert "gemini" in MODELS
+        assert "opus" in DEFAULT_MODEL_NICKNAMES
+        assert "gpt" in DEFAULT_MODEL_NICKNAMES
+        assert "gemini" in DEFAULT_MODEL_NICKNAMES
 
     def test_model_values_are_strings(self) -> None:
-        for model_name in MODELS.values():
+        for model_name in DEFAULT_MODEL_NICKNAMES.values():
             assert isinstance(model_name, str)
             assert len(model_name) > 0
