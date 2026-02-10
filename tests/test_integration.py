@@ -14,10 +14,12 @@ import os
 
 import pytest
 
-# Skip entire module unless we have a real API key
+# Skip entire module unless explicitly opted in.
+# Having CURSOR_API_KEY in the environment is NOT sufficient — these tests
+# launch real agents and cost real money.  Set RUN_INTEGRATION_TESTS=1 to run.
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("CURSOR_API_KEY"),
-    reason="CURSOR_API_KEY not set; skipping integration tests",
+    not os.environ.get("RUN_INTEGRATION_TESTS"),
+    reason="RUN_INTEGRATION_TESTS not set; skipping live API tests",
 )
 
 
