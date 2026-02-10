@@ -1,0 +1,31 @@
+{
+  "name": "Agentic Arena",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume"
+  ],
+  "postCreateCommand": "sudo chown vscode .pixi && pixi install && pixi run pre-commit install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "ms-python.python"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": ".pixi/envs/default/bin/python",
+        "python.testing.pytestEnabled": true,
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        }
+      }
+    }
+  },
+  "remoteUser": "vscode"
+}
