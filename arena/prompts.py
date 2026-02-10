@@ -1,72 +1,83 @@
 """Prompt templates for each arena phase.
 
-All prompts use XML-delimited output sections for robust parsing.
-Presentation order is shuffled to prevent positional bias.
+All prompts tell the agent its alias and exact file paths to commit.
+Presentation order of other agents' content is shuffled to prevent
+positional bias.
 """
 
 import random
 
+from arena.state import expected_path
 
 # ---------------------------------------------------------------------------
-# Branch hint block (Phase 0 — agent branch visibility)
+# Commit convention block (included in every prompt)
 # ---------------------------------------------------------------------------
-def _branch_hint_block(branch_names: dict[str, str] | None) -> str:
-    """Return a prompt block listing agent branch names for cross-inspection.
 
-    Returns an empty string when *branch_names* is ``None`` or empty,
-    keeping prompts backward-compatible.
-    """
-    if not branch_names:
-        return ""
-    lines = [
-        "",
-        "--- Agent Branches ---",
-        "Each agent's full work is committed to their branch. "
-        "If a summary above seems incomplete, run "
-        "`git fetch origin <branch>` and inspect their commits.",
-        "",
-    ]
-    for alias, branch in sorted(branch_names.items()):
-        label = alias.replace("_", " ").upper()
-        lines.append(f"  {label}: {branch}")
-    lines.append("")
-    return "\n".join(lines)
+_COMMIT_BLOCK = """\
+
+IMPORTANT: Commit arena output files in a SEPARATE commit from any
+code changes. The arena commit must:
+  - contain ONLY the files listed above (nothing else)
+  - use the commit message: [arena] {commit_desc}
+  - be your LAST commit (after any code changes)"""
 
 
 # ---------------------------------------------------------------------------
-# Solve phase
+# Solve phase (phase 1)
 # ---------------------------------------------------------------------------
+
 SOLVE_TEMPLATE = """\
-{task}
+You are {alias}. {task}
 
-Write your response with these XML-delimited sections:
+After completing your work, commit your structured response as two files:
+  {solution_path}
+  {analysis_path}
 
-<solution>
-## PLAN — Numbered key decisions with rationale.
-## CHANGES — Unified diff or precise change descriptions.
-</solution>
+{solution_path} should contain:
+  ## PLAN — Numbered key decisions with rationale.
+  ## CHANGES — Unified diff or precise change descriptions.
 
-<analysis>
-## RISKS — Known risks, edge cases, trade-offs.
-## OPEN QUESTIONS — Uncertainties requiring verification.
-</analysis>
-"""
+{analysis_path} should contain:
+  ## RISKS — Known risks, edge cases, trade-offs.
+  ## OPEN QUESTIONS — Uncertainties requiring verification.
+{commit_block}"""
 
 
-def solve_prompt(task: str) -> str:
+def solve_prompt(
+    task: str,
+    alias: str,
+    arena_number: int,
+    round_num: int,
+) -> str:
     """Generate the initial solve prompt."""
-    return SOLVE_TEMPLATE.format(task=task)
+    solution_path = expected_path(arena_number, round_num, "solve", alias, "solution")
+    analysis_path = expected_path(arena_number, round_num, "solve", alias, "analysis")
+    commit_desc = f"round {round_num:02d} solve {alias}"
+    return SOLVE_TEMPLATE.format(
+        alias=alias,
+        task=task,
+        solution_path=solution_path,
+        analysis_path=analysis_path,
+        commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
+    )
 
 
 # ---------------------------------------------------------------------------
-# Evaluate phase
+# Evaluate phase (phase 2 — critique + vote)
 # ---------------------------------------------------------------------------
+
 EVALUATE_TEMPLATE = """\
-Read these solutions from other agents:
+You are {alias}. Read these solutions from all agents:
 
 {solutions_block}
 
-Write a critique of each. DO NOT revise your own solution yet.
+And these self-reported analyses:
+
+{analyses_block}
+
+Your task has two parts:
+
+PART 1 — CRITIQUE (commit to {critique_path})
 
 For each agent's solution:
 - Strengths: what they do well.
@@ -77,168 +88,139 @@ Then state your position:
 - What you're keeping from your original approach and why.
 - What you'd adopt from others and why.
 - What you still disagree on and why.
-"""
+
+PART 2 — VERDICT (commit to {verdict_path})
+
+{verdict_path} must be valid JSON with this exact schema:
+{{
+  "convergence_score": <1-10>,
+  "best_solutions": [<aliases excluding your own ({alias}), at least one required>],
+  "remaining_disagreements": <count>,
+  "rationale": "<why these solutions are best / what still differs>"
+}}
+
+Score 8+ only if all remaining differences are trivial (style, naming,
+formatting). Any substantive disagreement on logic, architecture, or
+correctness caps the score at 7.
+
+Vote for the best solution(s) OTHER than your own.
+
+Commit both files:
+  {critique_path}
+  {verdict_path}
+{commit_block}"""
 
 
 def evaluate_prompt(
-    others: list[tuple[str, str]],
-    *,
-    branch_names: dict[str, str] | None = None,
+    alias: str,
+    solutions: list[tuple[str, str]],
+    analyses: list[tuple[str, str]],
+    arena_number: int,
+    round_num: int,
 ) -> str:
     """Generate the evaluate prompt with shuffled presentation order.
 
     Parameters
     ----------
-    others:
-        List of (alias, solution_text) tuples for the other two agents.
-    branch_names:
-        Optional mapping of alias → branch name for cross-inspection.
-    """
-    shuffled = list(others)
-    random.shuffle(shuffled)
-    blocks = []
-    for alias, solution in shuffled:
-        label = alias.replace("_", " ").upper()
-        blocks.append(f"=== {label} ===\n{solution}")
-    solutions_block = "\n\n".join(blocks)
-    text = EVALUATE_TEMPLATE.format(solutions_block=solutions_block)
-    return text + _branch_hint_block(branch_names)
-
-
-# ---------------------------------------------------------------------------
-# Revise phase
-# ---------------------------------------------------------------------------
-REVISE_TEMPLATE = """\
-Here is how all three agents (including you) were critiqued:
-
-{critiques_block}
-
-Produce your REVISED solution, incorporating the strongest elements.
-Use the same XML-delimited format:
-
-<solution>
-## PLAN and ## CHANGES as before.
-</solution>
-
-<analysis>
-## RISKS, ## OPEN QUESTIONS as before.
-## DISAGREEMENTS — Any remaining substantive disagreements
-with the other approaches, or "None."
-</analysis>
-"""
-
-
-def revise_prompt(
-    all_critiques: list[tuple[str, str]],
-    *,
-    branch_names: dict[str, str] | None = None,
-) -> str:
-    """Generate the revise prompt with shuffled critique order.
-
-    Parameters
-    ----------
-    all_critiques:
-        List of (alias, critique_text) tuples for all three agents.
-    branch_names:
-        Optional mapping of alias → branch name for cross-inspection.
-    """
-    shuffled = list(all_critiques)
-    random.shuffle(shuffled)
-    blocks = []
-    for alias, critique in shuffled:
-        label = alias.replace("_", " ").upper()
-        blocks.append(f"=== CRITIQUE BY {label} ===\n{critique}")
-    critiques_block = "\n\n".join(blocks)
-    text = REVISE_TEMPLATE.format(critiques_block=critiques_block)
-    return text + _branch_hint_block(branch_names)
-
-
-# ---------------------------------------------------------------------------
-# Verify phase
-# ---------------------------------------------------------------------------
-VERIFY_TEMPLATE = """\
-You are the consensus judge. You are one of the three contributors,
-but you do not know which alias is yours. Judge each solution purely
-on its technical merit, not on stylistic familiarity.
-
-Read these revised solutions:
-
-{solutions_block}
-
-And these self-reported analyses (including any remaining disagreements):
-
-{analyses_block}
-
-Perform this analysis in order:
-
-AGREEMENT POINTS — Specific points where all three converge.
-
-DISAGREEMENT POINTS — Every remaining difference. For each:
-state which approach is correct and why.
-
-MOST SIGNIFICANT DIFFERENCE — Identify the single biggest remaining
-difference. Is it trivial (style/naming) or substantive (logic/architecture)?
-
-CONVERGENCE SCORE — 1-10. Score 8+ only if all remaining differences
-are trivial (style, naming, formatting). Any substantive disagreement
-on logic, architecture, or correctness caps the score at 7.
-
-Wrap your structured verdict in XML:
-
-<verdict>
-decision: CONSENSUS or CONTINUE
-convergence_score: [1-10]
-remaining_disagreements: [count]
-base_solution: [alias of best solution to use as base, or "merged"]
-modifications: [list of specific changes to apply from other solutions]
-</verdict>
-
-If CONSENSUS (score >= 8): identify the best base solution by alias
-and enumerate specific modifications to incorporate from the others.
-Do NOT regenerate the full solution from scratch.
-
-If CONTINUE (score < 8): describe the substantive disagreements
-that need resolution in the next round.
-"""
-
-
-def verify_prompt(
-    solutions: list[tuple[str, str]],
-    analyses: list[tuple[str, str]],
-    *,
-    branch_names: dict[str, str] | None = None,
-) -> str:
-    """Generate the verify prompt with shuffled solution order.
-
-    Parameters
-    ----------
+    alias:
+        The alias of the agent receiving this prompt.
     solutions:
-        List of (alias, solution_text) tuples.
+        List of (alias, solution_text) tuples for ALL agents.
     analyses:
-        List of (alias, analysis_text) tuples.
-    branch_names:
-        Optional mapping of alias → branch name for cross-inspection.
+        List of (alias, analysis_text) tuples for ALL agents.
     """
     shuffled_solutions = list(solutions)
     random.shuffle(shuffled_solutions)
 
     sol_blocks = []
-    for alias, solution in shuffled_solutions:
-        label = alias.replace("_", " ").upper()
+    for sol_alias, solution in shuffled_solutions:
+        label = sol_alias.replace("_", " ").upper()
         sol_blocks.append(f"=== {label} SOLUTION ===\n{solution}")
     solutions_block = "\n\n".join(sol_blocks)
 
     # Keep analysis order matching the shuffled solution order
     analyses_dict = dict(analyses)
     ana_blocks = []
-    for alias, _ in shuffled_solutions:
-        label = alias.replace("_", " ").upper()
-        ana_text = analyses_dict.get(alias, "N/A")
+    for sol_alias, _ in shuffled_solutions:
+        label = sol_alias.replace("_", " ").upper()
+        ana_text = analyses_dict.get(sol_alias, "N/A")
         ana_blocks.append(f"=== {label} ANALYSIS ===\n{ana_text}")
     analyses_block = "\n\n".join(ana_blocks)
 
-    text = VERIFY_TEMPLATE.format(
+    critique_path = expected_path(
+        arena_number, round_num, "evaluate", alias, "critique"
+    )
+    verdict_path = expected_path(
+        arena_number, round_num, "evaluate", alias, "verdict", ext="json"
+    )
+    commit_desc = f"round {round_num:02d} evaluate {alias}"
+
+    return EVALUATE_TEMPLATE.format(
+        alias=alias,
         solutions_block=solutions_block,
         analyses_block=analyses_block,
+        critique_path=critique_path,
+        verdict_path=verdict_path,
+        commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
     )
-    return text + _branch_hint_block(branch_names)
+
+
+# ---------------------------------------------------------------------------
+# Revise phase (phase 3)
+# ---------------------------------------------------------------------------
+
+REVISE_TEMPLATE = """\
+You are {alias}. Here is how all agents were critiqued:
+
+{critiques_block}
+
+Produce your REVISED solution, incorporating the strongest elements.
+
+Commit your revised response as two files:
+  {solution_path}
+  {analysis_path}
+
+{solution_path} should contain:
+  ## PLAN and ## CHANGES as before.
+
+{analysis_path} should contain:
+  ## RISKS, ## OPEN QUESTIONS as before.
+  ## DISAGREEMENTS — Any remaining substantive disagreements
+  with the other approaches, or "None."
+{commit_block}"""
+
+
+def revise_prompt(
+    alias: str,
+    all_critiques: list[tuple[str, str]],
+    arena_number: int,
+    round_num: int,
+) -> str:
+    """Generate the revise prompt with shuffled critique order.
+
+    Parameters
+    ----------
+    alias:
+        The alias of the agent receiving this prompt.
+    all_critiques:
+        List of (alias, critique_text) tuples for all agents.
+    """
+    shuffled = list(all_critiques)
+    random.shuffle(shuffled)
+    blocks = []
+    for crit_alias, critique in shuffled:
+        label = crit_alias.replace("_", " ").upper()
+        blocks.append(f"=== CRITIQUE BY {label} ===\n{critique}")
+    critiques_block = "\n\n".join(blocks)
+
+    solution_path = expected_path(arena_number, round_num, "revise", alias, "solution")
+    analysis_path = expected_path(arena_number, round_num, "revise", alias, "analysis")
+    commit_desc = f"round {round_num:02d} revise {alias}"
+
+    return REVISE_TEMPLATE.format(
+        alias=alias,
+        critiques_block=critiques_block,
+        solution_path=solution_path,
+        analysis_path=analysis_path,
+        commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
+    )

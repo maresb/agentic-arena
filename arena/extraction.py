@@ -1,44 +1,74 @@
-"""Content extraction from agent conversations.
+"""Content extraction from agent conversations and committed files.
 
-Parses XML-delimited sections (solution, analysis, verdict) from agent
-responses, with fallback heuristics when tags are missing.
+Primary extraction path: fetch committed files from agent branches.
+Fallback: parse XML-delimited sections from conversation text.
+Verdict: JSON (committed as verdict.json or fenced block in conversation).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("arena")
 
 
 # ---------------------------------------------------------------------------
-# Verdict model
+# Vote verdict model (JSON-based)
 # ---------------------------------------------------------------------------
 
 
-class VerdictDecision(StrEnum):
-    """Possible judge decisions."""
+class VoteVerdict(BaseModel):
+    """Structured verdict parsed from an agent's verdict.json file."""
 
-    CONSENSUS = "CONSENSUS"
-    CONTINUE = "CONTINUE"
-
-
-class Verdict(BaseModel):
-    """Structured verdict parsed from the judge's response."""
-
-    decision: VerdictDecision = VerdictDecision.CONTINUE
     convergence_score: int | None = None
+    best_solutions: list[str] = Field(default_factory=list)
     remaining_disagreements: int | str | None = None
-    base_solution: str | None = None
-    modifications: str | None = None
+    rationale: str | None = None
+
+
+def parse_vote_verdict_json(text: str) -> VoteVerdict:
+    """Parse a vote verdict from JSON text.
+
+    Primary path: ``json.loads(text)`` directly (for file content fetched
+    from a branch).
+
+    Fallback: extract JSON from a fenced ``json`` code block in
+    conversation text, then parse.
+
+    Returns a :class:`VoteVerdict` with whatever fields could be parsed.
+    On complete failure, returns a default (empty) verdict.
+    """
+    # ── Primary: direct JSON parse ──
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return VoteVerdict.model_validate(data)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # ── Fallback: extract from fenced code block ──
+    # Matches ```json ... ``` or ``` ... ``` containing JSON
+    pattern = r"```(?:json)?\s*\n(.*?)\n\s*```"
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict):
+                logger.info("Parsed verdict from fenced JSON code block")
+                return VoteVerdict.model_validate(data)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    logger.warning("Failed to parse vote verdict from text")
+    return VoteVerdict()
 
 
 # ---------------------------------------------------------------------------
-# XML extraction
+# XML extraction (conversation fallback for solution/analysis)
 # ---------------------------------------------------------------------------
 
 
@@ -104,104 +134,10 @@ def extract_latest_response(conversation: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Verdict parsing
+# Re-prompt templates
 # ---------------------------------------------------------------------------
 
-
-def _keyword_fallback(text: str) -> Verdict:
-    """Fallback verdict extraction using structured patterns and keywords.
-
-    Extraction priority (first match wins):
-    1. ``decision: CONSENSUS`` / ``decision: CONTINUE`` pattern
-    2. Last occurrence of a bare ``CONSENSUS`` or ``CONTINUE`` keyword
-
-    If both keywords appear, the *last* occurrence wins (judges typically
-    state the final decision at the end of their response).
-    """
-    # ── Priority 1: "decision: X" pattern (e.g. outside a verdict tag) ──
-    decision_match = re.search(
-        r"\bdecision\s*:\s*(CONSENSUS|CONTINUE)\b", text, re.IGNORECASE
-    )
-    if decision_match:
-        value = decision_match.group(1).upper()
-        logger.info("Keyword fallback: found 'decision: %s' pattern", value)
-        if value == "CONSENSUS":
-            return Verdict(decision=VerdictDecision.CONSENSUS)
-        return Verdict(decision=VerdictDecision.CONTINUE)
-
-    # ── Priority 2: bare keyword, prefer last occurrence ──
-    last_consensus = -1
-    last_continue = -1
-    for m in re.finditer(r"\bCONSENSUS\b", text):
-        last_consensus = m.start()
-    for m in re.finditer(r"\bCONTINUE\b", text):
-        last_continue = m.start()
-
-    if last_consensus >= 0 or last_continue >= 0:
-        if last_consensus > last_continue:
-            logger.info(
-                "Keyword fallback: last keyword is CONSENSUS (pos %d)", last_consensus
-            )
-            return Verdict(decision=VerdictDecision.CONSENSUS)
-        if last_continue > last_consensus:
-            logger.info(
-                "Keyword fallback: last keyword is CONTINUE (pos %d)", last_continue
-            )
-            return Verdict(decision=VerdictDecision.CONTINUE)
-
-    logger.warning("Keyword fallback: no CONSENSUS or CONTINUE keyword found")
-    return Verdict()
-
-
-def parse_verdict(text: str) -> Verdict:
-    """Parse the structured verdict from the judge's response.
-
-    Returns a :class:`Verdict` with at least ``decision`` populated.
-    Falls back to keyword scanning when no ``<verdict>`` tag is found.
-    """
-    verdict_xml = extract_xml_section(text, "verdict")
-    if verdict_xml is None:
-        # Fallback: structured pattern search then bare keyword scan
-        logger.warning("No <verdict> tag found; falling back to keyword scan")
-        return _keyword_fallback(text)
-
-    decision = VerdictDecision.CONTINUE
-    convergence_score: int | None = None
-    remaining_disagreements: int | str | None = None
-    base_solution: str | None = None
-    modifications: str | None = None
-
-    for line in verdict_xml.splitlines():
-        line = line.strip()
-        if line.startswith("decision:"):
-            value = line.split(":", 1)[1].strip().upper()
-            if "CONSENSUS" in value:
-                decision = VerdictDecision.CONSENSUS
-        elif line.startswith("convergence_score:"):
-            try:
-                convergence_score = int(line.split(":", 1)[1].strip())
-            except ValueError:
-                pass
-        elif line.startswith("remaining_disagreements:"):
-            try:
-                remaining_disagreements = int(line.split(":", 1)[1].strip())
-            except ValueError:
-                remaining_disagreements = line.split(":", 1)[1].strip()
-        elif line.startswith("base_solution:"):
-            base_solution = line.split(":", 1)[1].strip()
-        elif line.startswith("modifications:"):
-            modifications = line.split(":", 1)[1].strip()
-
-    return Verdict(
-        decision=decision,
-        convergence_score=convergence_score,
-        remaining_disagreements=remaining_disagreements,
-        base_solution=base_solution,
-        modifications=modifications,
-    )
-
-
-# Re-prompt template for when extraction fails
+# Re-prompt for when solution/analysis XML extraction fails (conversation fallback)
 RETRY_PROMPT = """Your previous response could not be parsed.
 Please reformat using the required XML tags:
 
@@ -214,15 +150,12 @@ Please reformat using the required XML tags:
 </analysis>
 """
 
-# Re-prompt template for when verdict extraction falls back to keywords
-VERDICT_RETRY_PROMPT = """Your verdict could not be reliably parsed.
-Please re-emit ONLY the structured verdict block in this exact format:
+# Re-prompt for when an agent didn't commit the expected file
+FILE_COMMIT_RETRY_PROMPT = """You did not commit the expected arena output file:
+  {expected_path}
 
-<verdict>
-decision: CONSENSUS or CONTINUE
-convergence_score: [1-10]
-remaining_disagreements: [count]
-base_solution: [alias or "merged"]
-modifications: [list of changes]
-</verdict>
+Please create and commit this file now. The arena commit must:
+  - contain ONLY files under arenas/
+  - use the commit message: [arena] {commit_desc}
+  - be your LAST commit (after any code changes)
 """

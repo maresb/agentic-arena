@@ -1,18 +1,18 @@
 """Tests for content extraction from agent conversations."""
 
+import json
+
 import pytest
 
 from arena.extraction import (
+    FILE_COMMIT_RETRY_PROMPT,
     RETRY_PROMPT,
-    VERDICT_RETRY_PROMPT,
-    Verdict,
-    VerdictDecision,
-    _keyword_fallback,
+    VoteVerdict,
     extract_latest_response,
     extract_solution_and_analysis,
     extract_xml_section,
     is_assistant_message,
-    parse_verdict,
+    parse_vote_verdict_json,
 )
 
 
@@ -33,13 +33,6 @@ class TestExtractXmlSection:
 
     def test_missing_tag_returns_none(self) -> None:
         assert extract_xml_section("no tags here", "solution") is None
-
-    def test_nested_content(self) -> None:
-        text = "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
-        result = extract_xml_section(text, "verdict")
-        assert result is not None
-        assert "decision: CONSENSUS" in result
-        assert "convergence_score: 9" in result
 
     def test_whitespace_stripping(self) -> None:
         text = "<solution>  \n  content  \n  </solution>"
@@ -118,108 +111,102 @@ class TestExtractLatestResponse:
 
 
 # ---------------------------------------------------------------------------
-# Verdict model
+# VoteVerdict model
 # ---------------------------------------------------------------------------
 
 
-class TestVerdictModel:
-    def test_default_is_continue(self) -> None:
-        v = Verdict()
-        assert v.decision == VerdictDecision.CONTINUE
+class TestVoteVerdictModel:
+    def test_defaults(self) -> None:
+        v = VoteVerdict()
         assert v.convergence_score is None
+        assert v.best_solutions == []
+        assert v.rationale is None
 
-    def test_consensus_verdict(self) -> None:
-        v = Verdict(decision=VerdictDecision.CONSENSUS, convergence_score=9)
-        assert v.decision == VerdictDecision.CONSENSUS
+    def test_full_verdict(self) -> None:
+        v = VoteVerdict(
+            convergence_score=9,
+            best_solutions=["agent_a", "agent_b"],
+            remaining_disagreements=0,
+            rationale="Both solutions are equivalent",
+        )
         assert v.convergence_score == 9
+        assert v.best_solutions == ["agent_a", "agent_b"]
+        assert v.remaining_disagreements == 0
+        assert v.rationale == "Both solutions are equivalent"
 
 
 # ---------------------------------------------------------------------------
-# parse_verdict
+# parse_vote_verdict_json
 # ---------------------------------------------------------------------------
 
 
-class TestParseVerdict:
-    def test_consensus_verdict(self) -> None:
+class TestParseVoteVerdictJson:
+    def test_direct_json(self) -> None:
+        data = {
+            "convergence_score": 8,
+            "best_solutions": ["agent_b"],
+            "remaining_disagreements": 1,
+            "rationale": "Agent B has the cleanest approach",
+        }
+        text = json.dumps(data)
+        verdict = parse_vote_verdict_json(text)
+        assert verdict.convergence_score == 8
+        assert verdict.best_solutions == ["agent_b"]
+        assert verdict.remaining_disagreements == 1
+        assert verdict.rationale == "Agent B has the cleanest approach"
+
+    def test_fenced_json_block(self) -> None:
         text = (
-            "Analysis here...\n"
-            "<verdict>\n"
-            "decision: CONSENSUS\n"
-            "convergence_score: 9\n"
-            "remaining_disagreements: 0\n"
-            "base_solution: agent_a\n"
-            "modifications: minor naming changes\n"
-            "</verdict>"
+            "Here is my verdict:\n\n"
+            "```json\n"
+            '{"convergence_score": 7, "best_solutions": ["agent_c"], '
+            '"remaining_disagreements": 2, "rationale": "Close but not yet"}\n'
+            "```\n"
         )
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
+        verdict = parse_vote_verdict_json(text)
+        assert verdict.convergence_score == 7
+        assert verdict.best_solutions == ["agent_c"]
+
+    def test_fenced_block_without_json_tag(self) -> None:
+        text = (
+            "My evaluation:\n\n"
+            "```\n"
+            '{"convergence_score": 9, "best_solutions": ["agent_a"]}\n'
+            "```\n"
+        )
+        verdict = parse_vote_verdict_json(text)
         assert verdict.convergence_score == 9
-        assert verdict.remaining_disagreements == 0
-        assert verdict.base_solution == "agent_a"
+        assert verdict.best_solutions == ["agent_a"]
 
-    def test_continue_verdict(self) -> None:
-        text = (
-            "<verdict>\n"
-            "decision: CONTINUE\n"
-            "convergence_score: 5\n"
-            "remaining_disagreements: 3\n"
-            "base_solution: merged\n"
-            "modifications: TBD\n"
-            "</verdict>"
-        )
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
+    def test_invalid_json_returns_empty_verdict(self) -> None:
+        verdict = parse_vote_verdict_json("not json at all")
+        assert verdict.convergence_score is None
+        assert verdict.best_solutions == []
+
+    def test_partial_fields(self) -> None:
+        text = json.dumps({"convergence_score": 5})
+        verdict = parse_vote_verdict_json(text)
         assert verdict.convergence_score == 5
-        assert verdict.remaining_disagreements == 3
+        assert verdict.best_solutions == []
 
-    def test_fallback_keyword_consensus(self) -> None:
-        text = "After review, I declare CONSENSUS among all agents."
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
+    def test_extra_fields_ignored(self) -> None:
+        text = json.dumps(
+            {
+                "convergence_score": 9,
+                "best_solutions": ["agent_a"],
+                "extra_field": "ignored",
+            }
+        )
+        verdict = parse_vote_verdict_json(text)
+        assert verdict.convergence_score == 9
+
+    def test_empty_string(self) -> None:
+        verdict = parse_vote_verdict_json("")
         assert verdict.convergence_score is None
-
-    def test_fallback_keyword_continue(self) -> None:
-        text = "There are still disagreements to resolve."
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
-        assert verdict.convergence_score is None
-
-    def test_fallback_decision_pattern_consensus(self) -> None:
-        """'decision: CONSENSUS' pattern is preferred over bare keywords."""
-        text = "Let me CONTINUE my analysis. decision: CONSENSUS"
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
-
-    def test_fallback_decision_pattern_continue(self) -> None:
-        text = "We reached near-CONSENSUS but decision: CONTINUE"
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
-
-    def test_fallback_both_keywords_prefers_last(self) -> None:
-        """When both keywords appear, last occurrence wins."""
-        text = "We initially said CONTINUE but after further review CONSENSUS"
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
-
-    def test_fallback_both_keywords_last_is_continue(self) -> None:
-        text = "Near CONSENSUS but ultimately must CONTINUE"
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
-
-    def test_malformed_score_ignored(self) -> None:
-        text = "<verdict>\ndecision: CONSENSUS\nconvergence_score: high\n</verdict>"
-        verdict = parse_verdict(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
-        assert verdict.convergence_score is None
-
-    def test_returns_verdict_instance(self) -> None:
-        text = "<verdict>\ndecision: CONTINUE\n</verdict>"
-        verdict = parse_verdict(text)
-        assert isinstance(verdict, Verdict)
 
 
 # ---------------------------------------------------------------------------
-# RETRY_PROMPT exists and is non-empty
+# is_assistant_message
 # ---------------------------------------------------------------------------
 
 
@@ -235,6 +222,11 @@ class TestIsAssistantMessage:
 
     def test_empty_dict(self) -> None:
         assert is_assistant_message({}) is False
+
+
+# ---------------------------------------------------------------------------
+# Real API format
+# ---------------------------------------------------------------------------
 
 
 class TestRealApiFormatExtraction:
@@ -264,26 +256,9 @@ class TestRealApiFormatExtraction:
         assert extract_latest_response(conversation) == "second"
 
 
-class TestKeywordFallback:
-    def test_decision_pattern_takes_priority(self) -> None:
-        text = "CONTINUE discussion. decision: CONSENSUS is my call."
-        verdict = _keyword_fallback(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
-
-    def test_bare_keyword_last_wins(self) -> None:
-        text = "CONSENSUS initially, then changed to CONTINUE"
-        verdict = _keyword_fallback(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
-
-    def test_no_keywords_returns_default(self) -> None:
-        text = "I have analyzed all solutions."
-        verdict = _keyword_fallback(text)
-        assert verdict.decision == VerdictDecision.CONTINUE
-
-    def test_case_insensitive_decision_pattern(self) -> None:
-        text = "Decision: consensus"
-        verdict = _keyword_fallback(text)
-        assert verdict.decision == VerdictDecision.CONSENSUS
+# ---------------------------------------------------------------------------
+# Prompt constants
+# ---------------------------------------------------------------------------
 
 
 def test_retry_prompt_is_defined() -> None:
@@ -291,7 +266,6 @@ def test_retry_prompt_is_defined() -> None:
     assert "<analysis>" in RETRY_PROMPT
 
 
-def test_verdict_retry_prompt_is_defined() -> None:
-    assert "<verdict>" in VERDICT_RETRY_PROMPT
-    assert "CONSENSUS" in VERDICT_RETRY_PROMPT
-    assert "CONTINUE" in VERDICT_RETRY_PROMPT
+def test_file_commit_retry_prompt_is_defined() -> None:
+    assert "{expected_path}" in FILE_COMMIT_RETRY_PROMPT
+    assert "[arena]" in FILE_COMMIT_RETRY_PROMPT

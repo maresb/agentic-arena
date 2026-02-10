@@ -1,15 +1,18 @@
 """Phase implementations for the arena consensus loop.
 
-Each phase function mutates the :class:`ArenaState` in place and persists it
-after every meaningful step. The orchestrator can be killed and restarted
-at any point — previously completed work is not re-done.
+3-phase design: Solve -> Evaluate (critique + vote) -> Revise.
+Each phase function mutates the :class:`ArenaState` in place and
+persists it after every meaningful step.  The orchestrator can be
+killed and restarted at any point — previously completed work is
+not re-done.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import random
 import time
+from collections import Counter
 from collections.abc import Callable
 
 from arena.api import (
@@ -19,21 +22,27 @@ from arena.api import (
     wait_for_followup,
 )
 from arena.extraction import (
+    FILE_COMMIT_RETRY_PROMPT,
     RETRY_PROMPT,
-    VERDICT_RETRY_PROMPT,
-    VerdictDecision,
     extract_latest_response,
     extract_solution_and_analysis,
     extract_xml_section,
-    parse_verdict,
+    parse_vote_verdict_json,
 )
+from arena.git import fetch_file_from_branch
 from arena.prompts import (
     evaluate_prompt,
     revise_prompt,
     solve_prompt,
-    verify_prompt,
 )
-from arena.state import ArenaState, Phase, ProgressStatus, resolve_model, save_state
+from arena.state import (
+    ArenaState,
+    Phase,
+    ProgressStatus,
+    expected_path,
+    resolve_model,
+    save_state,
+)
 
 logger = logging.getLogger("arena")
 
@@ -100,6 +109,68 @@ def _saver(state: ArenaState, path: str) -> Callable[[], None]:
     return _save
 
 
+# ---------------------------------------------------------------------------
+# File-based extraction helpers
+# ---------------------------------------------------------------------------
+
+
+def _fetch_agent_file(state: ArenaState, alias: str, file_path: str) -> str | None:
+    """Fetch a file from an agent's branch. Returns content or None."""
+    branch = state.branch_names.get(alias)
+    if not branch:
+        logger.debug("No branch name for %s; cannot fetch file", alias)
+        return None
+    return fetch_file_from_branch(state.config.repo, branch, file_path)
+
+
+def _fetch_with_retry(
+    state: ArenaState,
+    alias: str,
+    file_path: str,
+    api: CursorCloudAPI,
+    *,
+    commit_desc: str,
+) -> str | None:
+    """Fetch a file from an agent's branch, re-prompting once if missing.
+
+    1. Try to fetch the file.
+    2. If not found, send a re-prompt follow-up and wait.
+    3. Try to fetch again.
+    4. Return content or None (caller falls back to conversation extraction).
+    """
+    content = _fetch_agent_file(state, alias, file_path)
+    if content is not None:
+        return content
+
+    # If we don't have a branch name for this agent, we can't fetch files
+    # at all — skip the retry and let the caller fall back to conversation.
+    if not state.branch_names.get(alias):
+        return None
+
+    # Re-prompt the agent to commit the file
+    agent_id = state.agent_ids.get(alias)
+    if not agent_id:
+        return None
+
+    logger.warning(
+        "File %s not found on %s branch; re-prompting",
+        file_path,
+        agent_label(alias, state),
+    )
+    prev_count = len(api.get_conversation(agent_id))
+    api.followup(
+        agent_id=agent_id,
+        prompt=FILE_COMMIT_RETRY_PROMPT.format(
+            expected_path=file_path,
+            commit_desc=commit_desc,
+        ),
+    )
+    wait_for_followup(api, agent_id, prev_count)
+
+    # Try again
+    return _fetch_agent_file(state, alias, file_path)
+
+
 def _extract_with_retry(
     api: CursorCloudAPI,
     agent_id: str,
@@ -107,17 +178,14 @@ def _extract_with_retry(
     *,
     max_retries: int = 1,
 ) -> tuple[str, str]:
-    """Extract solution/analysis, re-prompting once if XML tags are missing.
+    """Extract solution/analysis from conversation, re-prompting if XML tags missing.
 
-    If the initial extraction falls back to using the full response (no
-    ``<solution>`` tag found), sends :data:`RETRY_PROMPT` as a follow-up
-    and tries again.  Returns the best available result even if the retry
-    also fails.
+    This is the conversation fallback path, used when branch file
+    fetching fails.
     """
     solution, analysis = extract_solution_and_analysis(conversation)
 
     for attempt in range(max_retries):
-        # If the solution tag was found, we're good
         text = conversation[-1].get("content") or conversation[-1].get("text", "")
         if extract_xml_section(text, "solution") is not None:
             break
@@ -147,6 +215,8 @@ def step_solve(
 ) -> None:
     """Launch agents to solve the task independently in parallel."""
     _save = _saver(state, state_path)
+    anum = state.config.arena_number
+    rnd = state.round
 
     # Launch agents that haven't started yet
     for alias, model in state.alias_mapping.items():
@@ -156,7 +226,7 @@ def step_solve(
             logger.info("Launching %s", agent_label(alias, state))
             _record_timing_start(state, alias, "solve")
             agent = api.launch(
-                prompt=solve_prompt(state.config.task),
+                prompt=solve_prompt(state.config.task, alias, anum, rnd),
                 repo=state.config.repo,
                 ref=state.config.base_branch,
                 model=resolve_model(state, model),
@@ -177,13 +247,10 @@ def step_solve(
     if pending:
         wait_for_all_agents(api, pending)
 
-    # Capture branch names from the status() response now that agents
-    # have finished.  The launch() response doesn't include branch names,
-    # but status() returns target.branchName once the agent has created
-    # its working branch.  (arena-run-summary2 issue #4 / fix #3)
+    # Capture branch names from the status() response
     for alias in state.alias_mapping:
         if alias in state.branch_names:
-            continue  # Already have it (e.g. from a previous run)
+            continue
         agent_id = state.agent_ids.get(alias)
         if not agent_id:
             continue
@@ -201,17 +268,39 @@ def step_solve(
             )
     _save()
 
-    # Extract content from all finished agents (with retry on missing tags)
+    # Extract content: prefer branch files, fall back to conversation
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-        conversation = api.get_conversation(state.agent_ids[alias])
-        _update_token_usage(state, alias, conversation)
-        solution, analysis = _extract_with_retry(
-            api, state.agent_ids[alias], conversation
+
+        commit_desc = f"round {rnd:02d} solve {alias}"
+        sol_path = expected_path(anum, rnd, "solve", alias, "solution")
+        ana_path = expected_path(anum, rnd, "solve", alias, "analysis")
+
+        solution = _fetch_with_retry(
+            state, alias, sol_path, api, commit_desc=commit_desc
         )
+        analysis = _fetch_agent_file(state, alias, ana_path)
+
+        if solution is None:
+            # Conversation fallback
+            logger.info(
+                "Falling back to conversation extraction for %s",
+                agent_label(alias, state),
+            )
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+            solution, analysis_fallback = _extract_with_retry(
+                api, state.agent_ids[alias], conversation
+            )
+            if analysis is None:
+                analysis = analysis_fallback
+        else:
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+
         state.solutions[alias] = solution
-        state.analyses[alias] = analysis
+        state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "solve")
         _capture_agent_metadata(state, alias, api)
@@ -224,32 +313,30 @@ def step_solve(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Evaluate (parallel)
+# Phase 2: Evaluate (parallel — critique + vote)
 # ---------------------------------------------------------------------------
 
 
 def step_evaluate(
     state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
-    """Each agent critiques the other two solutions without revising its own."""
-    _save = _saver(state, state_path)
+    """Each agent critiques all solutions and votes for the best.
 
-    # Send all follow-ups, persisting message counts for resume safety.
-    # On resume, re-send to SENT agents whose message count hasn't changed
-    # (crash between persisting SENT and the actual POST).
+    This phase combines the old evaluate + verify phases.  It produces
+    both a critique (markdown) and a verdict (JSON) per agent.
+    """
+    _save = _saver(state, state_path)
+    anum = state.config.arena_number
+    rnd = state.round
+
+    # Build solutions and analyses for the prompt (all agents, including self)
+    all_solutions = list(state.solutions.items())
+    all_analyses = list(state.analyses.items())
+
+    # Send follow-ups to all agents
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-
-        if not state.config.paste_solutions and state.branch_names:
-            others = [
-                (k, "(See branch — use git fetch to inspect)")
-                for k in state.solutions
-                if k != alias
-            ]
-        else:
-            others = [(k, v) for k, v in state.solutions.items() if k != alias]
-        random.shuffle(others)  # Presentation-order neutrality
 
         if state.phase_progress.get(alias) == ProgressStatus.SENT:
             # Resume path: re-send if the agent never got the message
@@ -267,15 +354,15 @@ def step_evaluate(
             )
             state.phase_progress[alias] = ProgressStatus.SENT
             _record_timing_start(state, alias, "evaluate")
-            _save()  # Persist count BEFORE sending to survive crash
+            _save()
             logger.info("Sending evaluate follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=evaluate_prompt(others, branch_names=state.branch_names or None),
+            prompt=evaluate_prompt(alias, all_solutions, all_analyses, anum, rnd),
         )
 
-    # Wait for all SENT agents using persisted message counts
+    # Wait for all SENT agents
     pending = {
         alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
@@ -284,19 +371,143 @@ def step_evaluate(
     if pending:
         wait_for_all_followups(api, pending)
 
-    # Extract critiques
+    # Extract critiques and verdicts
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-        conversation = api.get_conversation(state.agent_ids[alias])
-        _update_token_usage(state, alias, conversation)
-        state.critiques[alias] = extract_latest_response(conversation)
+
+        commit_desc = f"round {rnd:02d} evaluate {alias}"
+        critique_path = expected_path(anum, rnd, "evaluate", alias, "critique")
+        verdict_path = expected_path(
+            anum, rnd, "evaluate", alias, "verdict", ext="json"
+        )
+
+        # ── Critique extraction ──
+        critique = _fetch_with_retry(
+            state, alias, critique_path, api, commit_desc=commit_desc
+        )
+        if critique is None:
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+            critique = extract_latest_response(conversation)
+        else:
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+
+        state.critiques[alias] = critique
+
+        # ── Verdict extraction ──
+        verdict_text = _fetch_with_retry(
+            state, alias, verdict_path, api, commit_desc=commit_desc
+        )
+        if verdict_text is None:
+            # Conversation fallback: try to parse JSON from the response
+            verdict_text = extract_latest_response(conversation)
+
+        verdict = parse_vote_verdict_json(verdict_text)
+
+        # Strip self-votes silently
+        if alias in verdict.best_solutions:
+            logger.info("Stripping self-vote from %s", agent_label(alias, state))
+            verdict.best_solutions = [a for a in verdict.best_solutions if a != alias]
+
+        state.verify_votes[alias] = verdict.best_solutions
+        if verdict.convergence_score is not None:
+            state.verify_scores[alias] = verdict.convergence_score
+
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "evaluate")
         _save()
 
-    state.phase = Phase.REVISE
-    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
+    # ── Accumulate verdict text for history ──
+    verdict_summary = json.dumps(
+        {"votes": state.verify_votes, "scores": state.verify_scores},
+        indent=2,
+    )
+    state.verdict_history.append(verdict_summary)
+
+    # ── Consensus check ──
+    n_agents = len(state.alias_mapping)
+    scores = list(state.verify_scores.values())
+    final_score = min(scores) if scores else 0
+
+    # Tally votes
+    all_votes: list[str] = []
+    for votes in state.verify_votes.values():
+        all_votes.extend(votes)
+    vote_tally = Counter(all_votes)
+
+    # Check for winner: needs N-1 votes (all non-author agents)
+    winner = None
+    for candidate, count in vote_tally.most_common():
+        if count >= n_agents - 1:
+            winner = candidate
+            break
+
+    consensus = final_score >= 8 and winner is not None
+
+    logger.info(
+        "Vote results: scores=%s, tally=%s, final_score=%d, winner=%s, consensus=%s",
+        state.verify_scores,
+        dict(vote_tally),
+        final_score,
+        winner,
+        consensus,
+    )
+
+    # ── Optional verify commands (only when consensus reached) ──
+    if consensus and state.config.verify_commands:
+        verify_failed = False
+        state.verify_results = []
+        # Run verify commands via the winning agent
+        verify_agent_alias = winner
+        verify_agent_id = state.agent_ids.get(verify_agent_alias or "")
+
+        if verify_agent_id:
+            for cmd in state.config.verify_commands:
+                cmd_prev_count = len(api.get_conversation(verify_agent_id))
+                logger.info(
+                    "Running verify command via %s: %s", verify_agent_alias, cmd
+                )
+                api.followup(
+                    agent_id=verify_agent_id,
+                    prompt=f"Run this command and report the result: {cmd}",
+                )
+                wait_for_followup(api, verify_agent_id, cmd_prev_count)
+                cmd_conversation = api.get_conversation(verify_agent_id)
+                cmd_result = extract_latest_response(cmd_conversation)
+                state.verify_results.append(cmd_result)
+                _save()
+                lower = cmd_result.lower()
+                if any(
+                    kw in lower for kw in ("fail", "error", "exception", "exit code")
+                ):
+                    verify_failed = True
+                    logger.warning("Verify command '%s' appears to have failed", cmd)
+
+            if verify_failed and state.config.verify_mode == "gating":
+                logger.warning(
+                    "Verify commands failed in gating mode; overriding consensus"
+                )
+                consensus = False
+
+    # ── Determine next phase ──
+    if consensus:
+        state.phase = Phase.DONE
+        state.completed = True
+        state.consensus_reached = True
+        state.verify_winner = winner
+        state.final_verdict = verdict_summary
+    elif state.round >= state.config.max_rounds:
+        state.phase = Phase.DONE
+        state.completed = True
+        state.consensus_reached = False
+        state.final_verdict = verdict_summary
+    else:
+        state.final_verdict = verdict_summary
+        state.phase = Phase.REVISE
+        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
+
     state.sent_msg_counts = {}
     _save()
 
@@ -309,23 +520,23 @@ def step_evaluate(
 def step_revise(
     state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
-    """Each agent revises its solution based on all three critiques."""
+    """Each agent revises its solution based on all critiques."""
     _save = _saver(state, state_path)
+    anum = state.config.arena_number
+    rnd = state.round
 
-    # Send all follow-ups, persisting message counts for resume safety.
-    # On resume, re-send to SENT agents whose message count hasn't changed.
+    # Send follow-ups
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
 
         all_critiques = list(state.critiques.items())
-        random.shuffle(all_critiques)
 
         if state.phase_progress.get(alias) == ProgressStatus.SENT:
             current_count = len(api.get_conversation(state.agent_ids[alias]))
             saved_count = state.sent_msg_counts.get(alias, 0)
             if current_count > saved_count:
-                continue  # Agent already received and may have replied
+                continue
             logger.info(
                 "Re-sending revise follow-up to %s (crash recovery)",
                 agent_label(alias, state),
@@ -336,17 +547,15 @@ def step_revise(
             )
             state.phase_progress[alias] = ProgressStatus.SENT
             _record_timing_start(state, alias, "revise")
-            _save()  # Persist count BEFORE sending to survive crash
+            _save()
             logger.info("Sending revise follow-up to %s", agent_label(alias, state))
 
         api.followup(
             agent_id=state.agent_ids[alias],
-            prompt=revise_prompt(
-                all_critiques, branch_names=state.branch_names or None
-            ),
+            prompt=revise_prompt(alias, all_critiques, anum, rnd),
         )
 
-    # Wait for all SENT agents using persisted message counts
+    # Wait for all SENT agents
     pending = {
         alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
         for alias in state.alias_mapping
@@ -355,205 +564,52 @@ def step_revise(
     if pending:
         wait_for_all_followups(api, pending)
 
-    # Extract revised solutions (with retry on missing tags)
+    # Extract revised solutions
     for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-        conversation = api.get_conversation(state.agent_ids[alias])
-        _update_token_usage(state, alias, conversation)
-        solution, analysis = _extract_with_retry(
-            api, state.agent_ids[alias], conversation
+
+        commit_desc = f"round {rnd:02d} revise {alias}"
+        sol_path = expected_path(anum, rnd, "revise", alias, "solution")
+        ana_path = expected_path(anum, rnd, "revise", alias, "analysis")
+
+        solution = _fetch_with_retry(
+            state, alias, sol_path, api, commit_desc=commit_desc
         )
+        analysis = _fetch_agent_file(state, alias, ana_path)
+
+        if solution is None:
+            logger.info(
+                "Falling back to conversation extraction for %s",
+                agent_label(alias, state),
+            )
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+            solution, analysis_fallback = _extract_with_retry(
+                api, state.agent_ids[alias], conversation
+            )
+            if analysis is None:
+                analysis = analysis_fallback
+        else:
+            conversation = api.get_conversation(state.agent_ids[alias])
+            _update_token_usage(state, alias, conversation)
+
         state.solutions[alias] = solution
-        state.analyses[alias] = analysis
+        state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "revise")
         _capture_agent_metadata(state, alias, api)
         _save()
 
-    state.phase = Phase.VERIFY
-    state.phase_progress = {}
-    state.verify_progress = ProgressStatus.PENDING
+    # Transition to next evaluate round
+    state.round += 1
+    state.phase = Phase.EVALUATE
+    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
     state.sent_msg_counts = {}
-    _save()
-
-
-# ---------------------------------------------------------------------------
-# Phase 4: Verify
-# ---------------------------------------------------------------------------
-
-
-def step_verify(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
-) -> None:
-    """A rotating judge evaluates all revised solutions for consensus.
-
-    This phase is fully idempotent: the selected judge and pre-followup
-    message count are persisted to state *before* the follow-up is sent,
-    so a crash-and-restart will not re-select a judge or send a duplicate
-    prompt.
-    """
-    _save = _saver(state, state_path)
-
-    if state.verify_progress == ProgressStatus.DONE:
-        return
-
-    # ── Step 1: Select judge (idempotent — only if not already chosen) ──
-    if state.verify_judge is None:
-        used = state.judge_history
-        available = [a for a in state.alias_mapping if a not in used]
-        if not available:
-            available = list(state.alias_mapping)
-        state.verify_judge = random.choice(available)
-        state.judge_history.append(state.verify_judge)
-        _save()
-
-    judge = state.verify_judge
-    logger.info("Judge for round %d: %s", state.round, agent_label(judge, state))
-
-    # ── Step 2: Send verdict prompt (with crash-recovery re-send) ──
-    need_send = False
-    if state.verify_progress != ProgressStatus.SENT:
-        # Fresh send
-        state.verify_prev_msg_count = len(api.get_conversation(state.agent_ids[judge]))
-        state.verify_progress = ProgressStatus.SENT
-        _save()  # Persist BEFORE the follow-up so a crash won't re-send
-        need_send = True
-    else:
-        # Resume path: re-send if the judge never got the message
-        current_count = len(api.get_conversation(state.agent_ids[judge]))
-        saved_count = state.verify_prev_msg_count or 0
-        if current_count <= saved_count:
-            logger.info(
-                "Re-sending verify follow-up to judge %s (crash recovery)",
-                agent_label(judge, state),
-            )
-            need_send = True
-
-    if need_send:
-        solutions = list(state.solutions.items())
-        analyses = list(state.analyses.items())
-        logger.info("Sending verify follow-up to judge %s", agent_label(judge, state))
-        api.followup(
-            agent_id=state.agent_ids[judge],
-            prompt=verify_prompt(
-                solutions, analyses, branch_names=state.branch_names or None
-            ),
-        )
-
-    # ── Step 3: Wait for response and extract verdict ──
-    prev_count = state.verify_prev_msg_count or 0
-    wait_for_followup(api, state.agent_ids[judge], prev_count)
-
-    conversation = api.get_conversation(state.agent_ids[judge])
-    _update_token_usage(state, judge, conversation)
-    verdict_text = extract_latest_response(conversation)
-
-    verdict = parse_verdict(verdict_text)
-
-    # If the verdict was extracted via keyword fallback (no <verdict> tag
-    # and no convergence_score), re-prompt the judge once for proper
-    # formatting.  This improves reliability without changing the outcome
-    # when the re-prompt succeeds.
-    if (
-        verdict.convergence_score is None
-        and extract_xml_section(verdict_text, "verdict") is None
-    ):
-        logger.warning(
-            "Verdict extracted via keyword fallback; re-prompting judge for "
-            "structured <verdict> block"
-        )
-        retry_prev = len(conversation)
-        api.followup(agent_id=state.agent_ids[judge], prompt=VERDICT_RETRY_PROMPT)
-        wait_for_followup(api, state.agent_ids[judge], retry_prev)
-        conversation = api.get_conversation(state.agent_ids[judge])
-        _update_token_usage(state, judge, conversation)
-        retry_text = extract_latest_response(conversation)
-        retry_verdict = parse_verdict(retry_text)
-        # Use the retry result if it has a proper XML verdict
-        if extract_xml_section(retry_text, "verdict") is not None:
-            verdict = retry_verdict
-            verdict_text = retry_text
-            logger.info("Verdict re-prompt succeeded with structured XML")
-        else:
-            logger.warning(
-                "Verdict re-prompt still lacks <verdict> tag; using original"
-            )
-
-    logger.info("Verdict: %s (score=%s)", verdict.decision, verdict.convergence_score)
-
-    # ── Step 4: Enforce convergence_score >= 8 for consensus ──
-    if (
-        verdict.decision == VerdictDecision.CONSENSUS
-        and verdict.convergence_score is not None
-        and verdict.convergence_score < 8
-    ):
-        logger.warning(
-            "Judge declared CONSENSUS but convergence_score=%d < 8; "
-            "overriding to CONTINUE per proposal rules",
-            verdict.convergence_score,
-        )
-        verdict.decision = VerdictDecision.CONTINUE
-
-    # ── Step 5: Run optional verification commands for code tasks ──
-    verify_failed = False
-    if state.config.verify_commands and verdict.decision == VerdictDecision.CONSENSUS:
-        state.verify_results = []
-        for cmd in state.config.verify_commands:
-            cmd_prev_count = len(api.get_conversation(state.agent_ids[judge]))
-            logger.info("Running verify command via judge: %s", cmd)
-            api.followup(
-                agent_id=state.agent_ids[judge],
-                prompt=f"Run this command and report the result: {cmd}",
-            )
-            wait_for_followup(api, state.agent_ids[judge], cmd_prev_count)
-            cmd_conversation = api.get_conversation(state.agent_ids[judge])
-            _update_token_usage(state, judge, cmd_conversation)
-            cmd_result = extract_latest_response(cmd_conversation)
-            state.verify_results.append(cmd_result)
-            _save()
-            # Detect failure keywords in result
-            lower = cmd_result.lower()
-            if any(kw in lower for kw in ("fail", "error", "exception", "exit code")):
-                verify_failed = True
-                logger.warning("Verify command '%s' appears to have failed", cmd)
-
-        # In gating mode, override consensus when verify commands fail
-        if verify_failed and state.config.verify_mode == "gating":
-            logger.warning(
-                "Verify commands failed in gating mode; overriding CONSENSUS to CONTINUE"
-            )
-            verdict.decision = VerdictDecision.CONTINUE
-
-    # ── Step 6: Determine next phase ──
-    # Always persist the verdict text so post-hoc analysis is possible,
-    # even on CONTINUE rounds where the arena loops back.
-    state.verdict_history.append(verdict_text)
-
-    if verdict.decision == VerdictDecision.CONSENSUS:
-        state.phase = Phase.DONE
-        state.completed = True
-        state.consensus_reached = True
-        state.final_verdict = verdict_text
-        state.verify_progress = ProgressStatus.DONE
-    elif state.round >= state.config.max_rounds:
-        state.phase = Phase.DONE
-        state.completed = True
-        state.consensus_reached = False
-        state.final_verdict = verdict_text
-        state.verify_progress = ProgressStatus.DONE
-    else:
-        # Persist verdict text on CONTINUE so the judge's reasoning is
-        # not discarded (arena-run-summary2 issue #2).
-        state.final_verdict = verdict_text
-        state.round += 1
-        state.phase = Phase.EVALUATE
-        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
-        state.verify_progress = ProgressStatus.PENDING
-        # Clear per-round transient state
-        state.critiques = {}
-        state.verify_judge = None
-        state.verify_prev_msg_count = None
-        state.verify_results = []
-
+    # Clear per-round transient state
+    state.critiques = {}
+    state.verify_votes = {}
+    state.verify_scores = {}
+    state.verify_winner = None
+    state.verify_results = []
     _save()

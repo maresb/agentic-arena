@@ -1,6 +1,6 @@
 """Main orchestrator loop and report generation.
 
-The orchestrator is a simple FSM: solve -> evaluate -> revise -> verify,
+The orchestrator is a simple FSM: solve -> evaluate -> revise,
 looping back to evaluate until consensus or max rounds.  All progress
 lives in the state file, so the process can be killed and restarted at
 any point.
@@ -13,12 +13,14 @@ transition.  :func:`run_orchestrator` is a convenience wrapper that loops
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 
 from arena.api import CursorCloudAPI
-from arena.phases import step_evaluate, step_revise, step_solve, step_verify
+from arena.phases import step_evaluate, step_revise, step_solve
 from arena.state import (
+    PHASE_NUMBERS,
     ArenaState,
     Phase,
     load_state,
@@ -63,6 +65,18 @@ def latest_arena_dir(root: str = ARENAS_ROOT) -> str | None:
     return os.path.join(root, numbered[-1][1])
 
 
+def arena_number_from_dir(arena_dir: str) -> int:
+    """Extract the NNNN number from an arena directory path.
+
+    Returns 1 if the directory name is not a valid number.
+    """
+    basename = os.path.basename(arena_dir.rstrip("/"))
+    try:
+        return int(basename)
+    except ValueError:
+        return 1
+
+
 logger = logging.getLogger("arena")
 
 # ---------------------------------------------------------------------------
@@ -73,7 +87,6 @@ PHASE_HANDLERS = {
     Phase.SOLVE: step_solve,
     Phase.EVALUATE: step_evaluate,
     Phase.REVISE: step_revise,
-    Phase.VERIFY: step_verify,
 }
 
 
@@ -111,12 +124,10 @@ def _archive_artifact(arena_dir: str, name: str, content: str) -> None:
 def _archive_round(state: ArenaState, arena_dir: str) -> None:
     """Archive the current round's outputs using deterministic naming.
 
-    Naming scheme: ``{round:02d}-{phase_name}-{model}-{artifact_type}-{uid}.md``
+    Naming scheme:
+    ``{round:02d}-{phase_number}-{phase_name}-{model}-{artifact_type}-{uid}.{ext}``
 
-    Uses phase names (solve, evaluate, revise, verify) instead of
-    misleading phase numbers, and model names instead of agent letters
-    for human readability.
-
+    Uses model names as identity (vs aliases in agent-committed files).
     *uid* is derived from content (SHA-256 prefix) for deduplication.
     Files already present on disk are not overwritten.
     """
@@ -127,32 +138,48 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
             str(state.alias_mapping.get(alias, "unknown"))
         )
 
+        # Determine which solve/revise phase produced the current solutions
+        # (solve for round 0, revise for subsequent rounds)
+        sol_phase = "solve" if rnd == 0 and state.phase != Phase.EVALUATE else "revise"
+        if rnd == 0 and state.phase in (Phase.EVALUATE, Phase.REVISE, Phase.DONE):
+            # Round 0: solutions come from solve
+            sol_phase = "solve"
+        elif rnd > 0:
+            sol_phase = "revise"
+        sol_phase_num = PHASE_NUMBERS[sol_phase]
+
         solution = state.solutions.get(alias)
         if solution:
             uid = _content_uid(solution)
-            name = f"{rnd:02d}-solve-{model}-solution-{uid}.md"
+            name = f"{rnd:02d}-{sol_phase_num}-{sol_phase}-{model}-solution-{uid}.md"
             _archive_artifact(arena_dir, name, solution)
 
         analysis = state.analyses.get(alias)
         if analysis:
             uid = _content_uid(analysis)
-            name = f"{rnd:02d}-solve-{model}-analysis-{uid}.md"
+            name = f"{rnd:02d}-{sol_phase_num}-{sol_phase}-{model}-analysis-{uid}.md"
             _archive_artifact(arena_dir, name, analysis)
 
         critique = state.critiques.get(alias)
         if critique:
             uid = _content_uid(critique)
-            name = f"{rnd:02d}-evaluate-{model}-critique-{uid}.md"
+            eval_num = PHASE_NUMBERS["evaluate"]
+            name = f"{rnd:02d}-{eval_num}-evaluate-{model}-critique-{uid}.md"
             _archive_artifact(arena_dir, name, critique)
 
-    # Archive verdict if present
-    if state.final_verdict and state.phase == Phase.DONE:
-        judge_model = sanitize_filename_component(
-            str(state.alias_mapping.get(state.judge_history[-1], "unknown"))
-        )
-        uid = _content_uid(state.final_verdict)
-        name = f"{rnd:02d}-verify-{judge_model}-verdict-{uid}.md"
-        _archive_artifact(arena_dir, name, state.final_verdict)
+        # Archive per-agent verdict
+        votes = state.verify_votes.get(alias)
+        score = state.verify_scores.get(alias)
+        if votes is not None or score is not None:
+            verdict_data = {
+                "convergence_score": score,
+                "best_solutions": votes or [],
+            }
+            verdict_json = json.dumps(verdict_data, indent=2)
+            uid = _content_uid(verdict_json)
+            eval_num = PHASE_NUMBERS["evaluate"]
+            name = f"{rnd:02d}-{eval_num}-evaluate-{model}-verdict-{uid}.json"
+            _archive_artifact(arena_dir, name, verdict_json)
 
 
 def generate_final_report(state: ArenaState, arena_dir: str) -> None:
@@ -170,15 +197,29 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
         "",
         "---",
         "",
-        "## Final Verdict",
-        "",
-        state.final_verdict or "N/A",
-        "",
-        "---",
-        "",
-        "## Final Solutions",
-        "",
     ]
+
+    # Voting results
+    if state.verify_scores or state.verify_votes:
+        report_lines.append("## Voting Results")
+        report_lines.append("")
+        for alias in state.alias_mapping:
+            model = state.alias_mapping.get(alias, "unknown")
+            score = state.verify_scores.get(alias, "N/A")
+            votes = state.verify_votes.get(alias, [])
+            report_lines.append(
+                f"- **{alias}** ({model}): score={score}, voted for {votes}"
+            )
+        scores = list(state.verify_scores.values())
+        final_score = min(scores) if scores else 0
+        report_lines.append(f"- **Final score:** {final_score} (min)")
+        if state.verify_winner:
+            winner_model = state.alias_mapping.get(state.verify_winner, "unknown")
+            report_lines.append(f"- **Winner:** {state.verify_winner} ({winner_model})")
+        report_lines.extend(["", "---", ""])
+
+    report_lines.append("## Final Solutions")
+    report_lines.append("")
     for alias, solution in state.solutions.items():
         model = state.alias_mapping.get(alias, "unknown")
         report_lines.append(f"### {alias} ({model})")
@@ -214,20 +255,10 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append(result)
             report_lines.append("")
 
-    # Print PR URL for the winning branch if available
-    if state.consensus_reached and state.branch_names:
-        # Determine winner from verdict's base_solution field or first alias
-        from arena.extraction import parse_verdict
-
-        winner_alias = None
-        if state.final_verdict:
-            verdict = parse_verdict(state.final_verdict)
-            if verdict.base_solution and verdict.base_solution in state.branch_names:
-                winner_alias = verdict.base_solution
-        if not winner_alias:
-            winner_alias = next(iter(state.branch_names), None)
-
-        if winner_alias and winner_alias in state.branch_names:
+    # PR URL for the winning branch
+    if state.consensus_reached and state.branch_names and state.verify_winner:
+        winner_alias = state.verify_winner
+        if winner_alias in state.branch_names:
             branch = state.branch_names[winner_alias]
             repo = state.config.repo
             if not repo.startswith("https://"):
@@ -249,7 +280,6 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
             report_lines.append("")
 
     if state.token_usage:
-        # Rough cost estimates per 1K tokens (input+output blended)
         cost_per_1k: dict[str, float] = {
             "opus": 0.075,
             "gpt": 0.060,
@@ -281,20 +311,7 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
 
 
 def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
-    """Execute exactly one phase transition and return the updated state.
-
-    This is the core FSM primitive.  It loads the state, dispatches the
-    current phase handler, archives outputs, saves the state, and returns.
-
-    Raises
-    ------
-    FileNotFoundError
-        If no state file exists.
-    RuntimeError
-        If the arena is already completed or CURSOR_API_KEY is missing.
-    ValueError
-        If the current phase has no handler (e.g. ``done``).
-    """
+    """Execute exactly one phase transition and return the updated state."""
     state_path = os.path.join(arena_dir, "state.yaml")
     state = load_state(state_path)
     if state is None:

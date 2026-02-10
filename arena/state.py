@@ -1,13 +1,12 @@
 """State management for the arena orchestrator.
 
-All arena state is stored in a YAML file by default (``state.yaml``) backed
-by Pydantic models.  JSON files (``state.json``) are still loaded for
-backward compatibility, and ``save_state`` will also write JSON when given
-a path ending in ``.json``.
+All arena state is stored in a YAML file (``state.yaml``) backed by
+Pydantic models.  The orchestrator is stateless: it reads the state
+file, performs one step, writes the updated state, and can be killed
+and restarted at any point without losing progress.
 
-The orchestrator is stateless: it reads the state file, performs one step,
-writes the updated state, and can be killed and restarted at any point
-without losing progress.
+State machine:  Solve -> Evaluate -> Done  (if consensus)
+                                  -> Revise -> Evaluate -> ...
 """
 
 from __future__ import annotations
@@ -29,6 +28,9 @@ logger = logging.getLogger("arena")
 
 ALIASES = ["agent_a", "agent_b", "agent_c"]
 
+# Phase name → phase number, used in file naming.
+PHASE_NUMBERS: dict[str, int] = {"solve": 1, "evaluate": 2, "revise": 3}
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -36,12 +38,15 @@ ALIASES = ["agent_a", "agent_b", "agent_c"]
 
 
 class Phase(StrEnum):
-    """Arena phase in the consensus loop."""
+    """Arena phase in the consensus loop.
+
+    3-phase design: Solve -> Evaluate (critique + vote) -> Revise.
+    Evaluate and Verify are collapsed into a single Evaluate phase.
+    """
 
     SOLVE = "solve"
     EVALUATE = "evaluate"
     REVISE = "revise"
-    VERIFY = "verify"
     DONE = "done"
 
 
@@ -83,12 +88,12 @@ class ArenaConfig(BaseModel, frozen=True):
     base_branch: str = "main"
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
-    paste_solutions: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
+    arena_number: int = Field(default=1, ge=1)
 
 
 class ArenaState(BaseModel):
-    """Full arena state, persisted to disk as YAML (with JSON backward compat).
+    """Full arena state, persisted to disk as YAML.
 
     Mutable — phase functions update fields in place and call
     :func:`save_state` after every meaningful step.
@@ -109,45 +114,27 @@ class ArenaState(BaseModel):
     solutions: dict[str, str] = Field(default_factory=dict)
     analyses: dict[str, str] = Field(default_factory=dict)
     critiques: dict[str, str] = Field(default_factory=dict)
-    judge_history: list[str] = Field(default_factory=list)
     completed: bool = False
     consensus_reached: bool | None = None
     final_verdict: str | None = None
 
     # Per-agent message counts recorded when follow-ups are sent.
-    # Used for message-count-based waiting on resume after a crash,
-    # preventing stale-message extraction when an agent is already
-    # FINISHED from a previous task.
-    #
-    # TODO: if per-agent metadata grows beyond sent_msg_counts (e.g.,
-    # tracking sent phase, retry counts), refactor into a FollowupMeta
-    # nested Pydantic model keyed by alias.
+    # Used for message-count-based waiting on resume after a crash.
     sent_msg_counts: dict[str, int] = Field(default_factory=dict)
-
-    # Verify-phase tracking: separate from per-agent phase_progress
-    verify_progress: ProgressStatus = ProgressStatus.PENDING
-
-    # Verify-phase idempotency: persisted so a crash between sending the
-    # verify follow-up and completing extraction doesn't re-select a judge
-    # or send a duplicate prompt on restart.
-    verify_judge: str | None = None
-    verify_prev_msg_count: int | None = None
 
     # Verify command outputs: stored as first-class data so the report
     # can include them and failures can optionally veto consensus.
     verify_results: list[str] = Field(default_factory=list)
 
-    # Agent branch names: captured from the launch API response so that
+    # Agent branch names: captured from the status API response so that
     # agents can inspect each other's committed work via git fetch.
     branch_names: dict[str, str] = Field(default_factory=dict)
 
     # Token usage tracking: cumulative per-alias totals
     token_usage: dict[str, int] = Field(default_factory=dict)
 
-    # Verdict history: accumulates the judge's verdict text for every
-    # verify round (including CONTINUE rounds).  ``final_verdict`` is
-    # still set on terminal outcomes; this list preserves intermediate
-    # verdicts that would otherwise be lost.
+    # Verdict history: accumulates verdict JSON strings for every evaluate
+    # round (including CONTINUE rounds).  Preserves intermediate verdicts.
     verdict_history: list[str] = Field(default_factory=list)
 
     # Per-agent timing: maps alias → {phase_name: {start: float, end: float}}.
@@ -157,6 +144,17 @@ class ArenaState(BaseModel):
     # Per-agent metadata from the API status response (summary, linesAdded,
     # filesChanged).  Captured after the solve and revise phases complete.
     agent_metadata: dict[str, dict[str, str | int]] = Field(default_factory=dict)
+
+    # --- Multi-agent voting (populated during evaluate phase) ---
+
+    # Each agent's voted-for aliases (e.g. {"agent_a": ["agent_b", "agent_c"]}).
+    verify_votes: dict[str, list[str]] = Field(default_factory=dict)
+
+    # Each agent's individual convergence score (1-10).
+    verify_scores: dict[str, int] = Field(default_factory=dict)
+
+    # The elected winner alias (set when consensus is reached).
+    verify_winner: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +171,27 @@ def resolve_model(state: ArenaState, name: str) -> str:
     (``"claude-4.6-opus-high-thinking"``).
     """
     return state.model_nicknames.get(name, name)
+
+
+# ---------------------------------------------------------------------------
+# File naming helpers
+# ---------------------------------------------------------------------------
+
+
+def expected_path(
+    arena_number: int,
+    round_num: int,
+    phase_name: str,
+    alias: str,
+    artifact: str,
+    ext: str = "md",
+) -> str:
+    """Build the expected file path for an agent-committed output.
+
+    Returns e.g. ``arenas/0003/00-1-solve-agent_a-solution.md``.
+    """
+    phase_num = PHASE_NUMBERS[phase_name]
+    return f"arenas/{arena_number:04d}/{round_num:02d}-{phase_num}-{phase_name}-{alias}-{artifact}.{ext}"
 
 
 # ---------------------------------------------------------------------------
@@ -280,12 +299,8 @@ def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
     """Load arena state from disk. Returns ``None`` if the file does not exist.
 
     Supports both YAML (``state.yaml``) and legacy JSON (``state.json``)
-    files.  If the given *path* does not exist, falls back to checking
-    the alternate extension (YAML ↔ JSON) in the same directory.
-
-    Transparently resolves ``file:`` references back to inline text so
-    that phase functions always see plain strings.  Handles both the old
-    inline format and the new externalized format (migration shim).
+    files.  Transparently resolves ``file:`` references back to inline
+    text so that phase functions always see plain strings.
     """
     # Try the requested path first, then the alternate extension
     candidates = [path]
@@ -321,9 +336,6 @@ def load_state(path: str = "arena/state.yaml") -> ArenaState | None:
             )
         return _resolve_state_from_dict(data, base_dir)
     else:
-        # Legacy JSON format: parse into a dict and reuse the shared
-        # resolution logic so that adding new externalizable fields only
-        # needs updating in one place.
         data = json.loads(raw)
         return _resolve_state_from_dict(data, base_dir)
 
@@ -334,9 +346,6 @@ def save_state(state: ArenaState, path: str = "arena/state.yaml") -> None:
     Large text fields are externalized to separate ``.md`` files under an
     ``artifacts/`` subdirectory.  The state file stores ``file:`` references
     instead of inline text.
-
-    Saves as YAML for human readability.  If *path* ends with ``.json``,
-    falls back to JSON output for backward compatibility.
     """
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
@@ -415,8 +424,8 @@ def init_state(
     max_rounds: int = 3,
     verify_commands: list[str] | None = None,
     models: list[str] | None = None,
-    paste_solutions: bool = False,
     verify_mode: str = "advisory",
+    arena_number: int = 1,
 ) -> ArenaState:
     """Create a fresh arena state with randomized alias-to-model mapping.
 
@@ -426,6 +435,8 @@ def init_state(
         Optional list of model short names (e.g. ``["opus", "gpt"]``).
         Defaults to :data:`DEFAULT_MODELS`.  Dynamically sizes the alias
         list to match.
+    arena_number:
+        Sequential arena run number (the NNNN in ``arenas/NNNN/``).
     """
     model_list = list(models) if models else list(DEFAULT_MODELS)
     random.shuffle(model_list)
@@ -437,8 +448,8 @@ def init_state(
         base_branch=base_branch,
         max_rounds=max_rounds,
         verify_commands=verify_commands or [],
-        paste_solutions=paste_solutions,
         verify_mode=verify_mode,
+        arena_number=arena_number,
     )
 
     return ArenaState(

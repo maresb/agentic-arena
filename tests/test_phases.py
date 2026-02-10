@@ -4,14 +4,15 @@ These tests verify the orchestrator's control flow and state transitions
 without making real API calls.
 """
 
-from unittest.mock import MagicMock
+import json
+
+from unittest.mock import MagicMock, patch
 
 from arena.phases import (
     _extract_with_retry,
     step_evaluate,
     step_revise,
     step_solve,
-    step_verify,
 )
 from arena.state import ArenaState, Phase, ProgressStatus, init_state
 
@@ -68,6 +69,23 @@ def make_mock_api(
     return api
 
 
+def _make_vote_response(score: int = 9, best: list[str] | None = None) -> list[dict]:
+    """Build a mock conversation where the latest message is a vote verdict JSON."""
+    best = best or ["agent_a"]
+    verdict = {
+        "convergence_score": score,
+        "best_solutions": best,
+        "remaining_disagreements": 0 if score >= 8 else 2,
+        "rationale": "Test rationale",
+    }
+    return [
+        {
+            "role": "assistant",
+            "content": json.dumps(verdict),
+        }
+    ]
+
+
 class TestStepSolve:
     def test_launches_three_agents(self) -> None:
         state = init_state(task="test task", repo="owner/repo")
@@ -116,22 +134,23 @@ class TestStepSolve:
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
 
-    def test_captures_branch_names_from_status(self) -> None:
+    @patch("arena.phases.fetch_file_from_branch", return_value=None)
+    def test_captures_branch_names_from_status(self, _mock_fetch: MagicMock) -> None:
         """After solve, branch names are extracted from status() responses."""
-        state = init_state(task="test", repo="r")
+        state = init_state(task="test", repo="owner/repo")
         api = make_mock_api()
 
         # Make launch return unique IDs
         call_count = {"n": 0}
 
-        def mock_launch(**kw):
+        def mock_launch(**kw: object) -> dict:
             call_count["n"] += 1
             return {"id": f"id-{call_count['n']}"}
 
         api.launch.side_effect = mock_launch
 
         # Status returns branch name in target.branchName
-        def mock_status(agent_id):
+        def mock_status(agent_id: str) -> dict:
             return {
                 "status": "FINISHED",
                 "target": {"branchName": f"cursor/branch-{agent_id}"},
@@ -162,24 +181,19 @@ class TestStepEvaluate:
 
     def test_sends_followups_to_all_agents(self) -> None:
         state = self._make_solved_state()
-        api = make_mock_api(
-            conversation_response=[
-                {"role": "assistant", "content": "critique text here"}
-            ]
-        )
+        # Return a valid vote verdict + critique
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
 
         step_evaluate(state, api)
 
         assert api.followup.call_count == 3
-        assert state.phase == Phase.REVISE
         for alias in state.alias_mapping:
             assert alias in state.critiques
 
-    def test_transitions_to_revise_phase(self) -> None:
+    def test_low_score_transitions_to_revise(self) -> None:
+        """Score < 8 means no consensus -> transitions to REVISE."""
         state = self._make_solved_state()
-        api = make_mock_api(
-            conversation_response=[{"role": "assistant", "content": "my critique"}]
-        )
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
 
         step_evaluate(state, api)
 
@@ -187,17 +201,76 @@ class TestStepEvaluate:
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
 
+    def test_high_score_unanimous_reaches_consensus(self) -> None:
+        """Score >= 8 and unanimous vote -> consensus -> DONE."""
+        state = self._make_solved_state()
+        aliases = list(state.alias_mapping.keys())
+        winner = aliases[0]
+
+        # All agents vote for aliases[0]. Self-vote by aliases[0] is stripped,
+        # giving aliases[0] two votes from the other two agents (N-1 = 2).
+        api = make_mock_api(
+            conversation_response=_make_vote_response(score=9, best=[winner])
+        )
+
+        step_evaluate(state, api)
+
+        assert state.phase == Phase.DONE
+        assert state.completed is True
+        assert state.consensus_reached is True
+        assert state.verify_winner == winner
+
+    def test_strips_self_votes(self) -> None:
+        """If an agent votes for itself, the self-vote is silently stripped."""
+        state = self._make_solved_state()
+        aliases = list(state.alias_mapping.keys())
+
+        # All agents vote for the same two aliases (including one that is
+        # always a self-vote for one agent). The self-vote should be stripped.
+        api = make_mock_api(
+            conversation_response=_make_vote_response(
+                score=5, best=[aliases[0], aliases[1]]
+            )
+        )
+
+        step_evaluate(state, api)
+
+        # aliases[0]'s self-vote should be stripped from their own entry
+        assert aliases[0] not in state.verify_votes.get(aliases[0], [])
+        # aliases[1]'s self-vote should be stripped from their own entry
+        assert aliases[1] not in state.verify_votes.get(aliases[1], [])
+
     def test_persists_sent_msg_counts(self) -> None:
         """Message counts are persisted in state for resume safety."""
         state = self._make_solved_state()
-        api = make_mock_api(
-            conversation_response=[{"role": "assistant", "content": "critique text"}]
-        )
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
 
         step_evaluate(state, api)
 
         # After completion, sent_msg_counts should be cleared at transition
         assert state.sent_msg_counts == {}
+
+    def test_verdict_history_accumulated(self) -> None:
+        """Each evaluate round appends to verdict_history."""
+        state = self._make_solved_state()
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
+        assert state.verdict_history == []
+
+        step_evaluate(state, api)
+
+        assert len(state.verdict_history) == 1
+
+    def test_max_rounds_completes_without_consensus(self) -> None:
+        """When round >= max_rounds, arena completes even without consensus."""
+        state = self._make_solved_state()
+        state.round = 3  # max_rounds defaults to 3
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
+
+        step_evaluate(state, api)
+
+        assert state.phase == Phase.DONE
+        assert state.completed is True
+        assert state.consensus_reached is False
 
     def test_resumes_with_sent_state(self) -> None:
         """Agents marked SENT from a previous run are waited on, not re-sent."""
@@ -207,14 +280,12 @@ class TestStepEvaluate:
         state.phase_progress[first_alias] = ProgressStatus.SENT
         state.sent_msg_counts[first_alias] = 0  # had 0 msgs before send
 
-        api = make_mock_api(
-            conversation_response=[{"role": "assistant", "content": "critique text"}]
-        )
+        api = make_mock_api(conversation_response=_make_vote_response(score=5))
 
         step_evaluate(state, api)
 
-        # Should still complete — all three agents get critiques
-        assert state.phase == Phase.REVISE
+        # Should still complete — all three agents done
+        assert state.phase in (Phase.REVISE, Phase.DONE)
         for alias in state.alias_mapping:
             assert alias in state.critiques
 
@@ -239,279 +310,35 @@ class TestStepRevise:
         step_revise(state, api)
 
         assert api.followup.call_count == 3
-        assert state.phase == Phase.VERIFY
+        assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:
             assert alias in state.solutions
 
-    def test_transitions_to_verify_phase(self) -> None:
+    def test_transitions_to_evaluate_and_increments_round(self) -> None:
         state = self._make_evaluated_state()
+        assert state.round == 0
         api = make_mock_api()
 
         step_revise(state, api)
 
-        assert state.phase == Phase.VERIFY
-        assert state.verify_progress == ProgressStatus.PENDING
-
-
-class TestStepVerify:
-    def _make_revised_state(self) -> ArenaState:
-        """Create a state that's ready for verify."""
-        state = init_state(task="test", repo="r")
-        state.phase = Phase.VERIFY
-        state.verify_progress = ProgressStatus.PENDING
-        for i, alias in enumerate(state.alias_mapping):
-            state.agent_ids[alias] = f"agent-{i}"
-            state.solutions[alias] = f"Revised solution from {alias}"
-            state.analyses[alias] = f"Revised analysis from {alias}"
-            state.critiques[alias] = f"Critique from {alias}"
-        return state
-
-    def test_consensus_completes_arena(self) -> None:
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "Analysis...\n"
-                    "<verdict>\n"
-                    "decision: CONSENSUS\n"
-                    "convergence_score: 9\n"
-                    "remaining_disagreements: 0\n"
-                    "base_solution: agent_a\n"
-                    "modifications: none\n"
-                    "</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert state.completed is True
-        assert state.consensus_reached is True
-        assert state.phase == Phase.DONE
-        assert state.final_verdict is not None
-        assert len(state.judge_history) == 1
-
-    def test_continue_goes_to_next_round(self) -> None:
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\n"
-                    "decision: CONTINUE\n"
-                    "convergence_score: 5\n"
-                    "remaining_disagreements: 3\n"
-                    "base_solution: merged\n"
-                    "modifications: TBD\n"
-                    "</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert state.completed is False
         assert state.phase == Phase.EVALUATE
         assert state.round == 1
+        for alias in state.alias_mapping:
+            assert state.phase_progress[alias] == ProgressStatus.PENDING
 
-    def test_max_rounds_reached_completes(self) -> None:
-        state = self._make_revised_state()
-        state.round = 3
-        # config is frozen, so recreate with max_rounds=3
-        # (init_state already defaults to 3)
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 6\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
+    def test_clears_transient_state(self) -> None:
+        """On transition, per-round state is cleared."""
+        state = self._make_evaluated_state()
+        state.verify_votes = {"agent_a": ["agent_b"]}
+        state.verify_scores = {"agent_a": 5}
+        api = make_mock_api()
 
-        step_verify(state, api)
+        step_revise(state, api)
 
-        assert state.completed is True
-        assert state.consensus_reached is False
-        assert state.phase == Phase.DONE
-
-    def test_judge_rotation(self) -> None:
-        state = self._make_revised_state()
-        state.judge_history = []
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert len(state.judge_history) == 1
-        judge = state.judge_history[0]
-        assert judge in state.alias_mapping
-
-    def test_verify_idempotent_judge_selection(self) -> None:
-        """If verify_judge is already set, step_verify uses it (no re-selection)."""
-        state = self._make_revised_state()
-        # Pre-select a specific judge
-        state.verify_judge = "agent_a"
-        state.judge_history = ["agent_a"]
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        # Should still have only one entry — no duplicate append
-        assert state.judge_history == ["agent_a"]
-        assert state.completed is True
-
-    def test_verify_idempotent_sent_state(self) -> None:
-        """If verify is already SENT, step_verify skips sending the follow-up."""
-        state = self._make_revised_state()
-        state.verify_judge = "agent_a"
-        state.judge_history = ["agent_a"]
-        state.verify_progress = ProgressStatus.SENT
-        # prev_msg_count=0 means the conversation already has a response
-        # (the agent responded to the follow-up sent in a previous run)
-        state.verify_prev_msg_count = 0
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        # Follow-up should NOT have been called (already sent)
-        api.followup.assert_not_called()
-        assert state.completed is True
-
-    def test_consensus_overridden_when_score_below_8(self) -> None:
-        """Judge says CONSENSUS but score < 8 => override to CONTINUE."""
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\n"
-                    "decision: CONSENSUS\n"
-                    "convergence_score: 6\n"
-                    "remaining_disagreements: 2\n"
-                    "</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        # Should NOT be consensus — score < 8
-        assert state.completed is False
-        assert state.phase == Phase.EVALUATE
-        assert state.round == 1
-
-    def test_consensus_accepted_when_score_is_8(self) -> None:
-        """Score == 8 is the threshold — should accept consensus."""
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 8\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert state.completed is True
-        assert state.consensus_reached is True
-
-    def test_verify_clears_transient_state_on_continue(self) -> None:
-        """On CONTINUE, verify_judge/verify_prev_msg_count are cleared."""
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONTINUE\nconvergence_score: 4\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert state.verify_judge is None
-        assert state.verify_prev_msg_count is None
-        assert state.verify_results == []
-
-    def test_verdict_text_persisted_on_continue(self) -> None:
-        """On CONTINUE, final_verdict is set so the judge's reasoning is preserved."""
-        state = self._make_revised_state()
-        verdict_content = (
-            "My analysis...\n"
-            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
-        )
-        verdict_response = [{"role": "assistant", "content": verdict_content}]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert state.final_verdict is not None
-        assert "CONTINUE" in state.final_verdict
-
-    def test_verdict_history_accumulates(self) -> None:
-        """Each verify round appends to verdict_history."""
-        state = self._make_revised_state()
-        verdict_content = (
-            "<verdict>\ndecision: CONTINUE\nconvergence_score: 5\n</verdict>"
-        )
-        verdict_response = [{"role": "assistant", "content": verdict_content}]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        assert state.verdict_history == []
-        step_verify(state, api)
-        assert len(state.verdict_history) == 1
-        assert "CONTINUE" in state.verdict_history[0]
-
-    def test_verdict_history_on_consensus(self) -> None:
-        """Consensus verdict is also appended to verdict_history."""
-        state = self._make_revised_state()
-        verdict_response = [
-            {
-                "role": "assistant",
-                "content": (
-                    "<verdict>\ndecision: CONSENSUS\nconvergence_score: 9\n</verdict>"
-                ),
-            }
-        ]
-        api = make_mock_api(conversation_response=verdict_response)
-
-        step_verify(state, api)
-
-        assert len(state.verdict_history) == 1
-        assert "CONSENSUS" in state.verdict_history[0]
-        assert state.final_verdict is not None
+        assert state.critiques == {}
+        assert state.verify_votes == {}
+        assert state.verify_scores == {}
+        assert state.verify_winner is None
 
 
 class TestExtractWithRetry:

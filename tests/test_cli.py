@@ -128,45 +128,6 @@ class TestInitModelsFlag:
             assert state is not None
             assert len(state.alias_mapping) == 2
 
-    def test_paste_solutions_default(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(
-                app,
-                [
-                    "init",
-                    "--task",
-                    "test",
-                    "--repo",
-                    "r",
-                    "--arena-dir",
-                    tmpdir,
-                ],
-            )
-            assert result.exit_code == 0
-            state = load_state(os.path.join(tmpdir, "state.yaml"))
-            assert state is not None
-            assert state.config.paste_solutions is False
-
-    def test_paste_solutions_flag(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(
-                app,
-                [
-                    "init",
-                    "--task",
-                    "test",
-                    "--repo",
-                    "r",
-                    "--paste-solutions",
-                    "--arena-dir",
-                    tmpdir,
-                ],
-            )
-            assert result.exit_code == 0
-            state = load_state(os.path.join(tmpdir, "state.yaml"))
-            assert state is not None
-            assert state.config.paste_solutions is True
-
     def test_verify_mode_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(
@@ -187,6 +148,28 @@ class TestInitModelsFlag:
             state = load_state(os.path.join(tmpdir, "state.yaml"))
             assert state is not None
             assert state.config.verify_mode == "gating"
+
+    def test_arena_number_from_dir(self) -> None:
+        """Arena number is derived from the directory name."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            arena_dir = os.path.join(tmpdir, "0042")
+            os.makedirs(arena_dir)
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "--task",
+                    "test",
+                    "--repo",
+                    "r",
+                    "--arena-dir",
+                    arena_dir,
+                ],
+            )
+            assert result.exit_code == 0
+            state = load_state(os.path.join(arena_dir, "state.yaml"))
+            assert state is not None
+            assert state.config.arena_number == 42
 
 
 class TestStepCommand:
@@ -224,3 +207,17 @@ class TestStatusCommand:
             result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
             assert result.exit_code == 1
             assert "No arena state found" in result.output
+
+    def test_shows_voting_info(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task="test", repo="r")
+            state.verify_votes = {"agent_a": ["agent_b"]}
+            state.verify_scores = {"agent_a": 8}
+            state.verify_winner = "agent_b"
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+            result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
+            assert result.exit_code == 0
+            assert "Voting" in result.output
+            assert "score=8" in result.output
+            assert "Winner" in result.output

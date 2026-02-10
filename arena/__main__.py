@@ -20,13 +20,14 @@ from dotenv import load_dotenv
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
 from arena.orchestrator import (  # noqa: E402
+    arena_number_from_dir,
     generate_final_report,
     latest_arena_dir,
     next_arena_dir,
     run_orchestrator,
     step_once,
 )
-from arena.state import load_state, save_state, init_state  # noqa: E402
+from arena.state import init_state, load_state, save_state  # noqa: E402
 
 app = typer.Typer(
     name="arena",
@@ -73,9 +74,7 @@ def init(
     task: Annotated[str, typer.Option(help="Task description for the agents to solve")],
     repo: Annotated[str, typer.Option(help="GitHub repository (owner/repo format)")],
     base_branch: Annotated[str, typer.Option(help="Base branch to work from")] = "main",
-    max_rounds: Annotated[
-        int, typer.Option(help="Maximum evaluate-revise-verify rounds")
-    ] = 3,
+    max_rounds: Annotated[int, typer.Option(help="Maximum evaluate-revise rounds")] = 3,
     verify_commands: Annotated[
         str | None,
         typer.Option(help="Comma-separated commands to run during verify"),
@@ -86,13 +85,6 @@ def init(
             help="Comma-separated model list (e.g. opus,gpt). Defaults to all."
         ),
     ] = None,
-    paste_solutions: Annotated[
-        bool,
-        typer.Option(
-            "--paste-solutions/--no-paste-solutions",
-            help="Paste full solution text into prompts instead of agents git fetching each others' branches.",
-        ),
-    ] = False,
     verify_mode: Annotated[
         str,
         typer.Option(
@@ -118,6 +110,8 @@ def init(
     if models and not parsed_models:
         raise typer.BadParameter("--models must contain at least one model name")
 
+    anum = arena_number_from_dir(arena_dir)
+
     state = init_state(
         task=task,
         repo=repo,
@@ -125,8 +119,8 @@ def init(
         max_rounds=max_rounds,
         verify_commands=parsed_commands,
         models=parsed_models,
-        paste_solutions=paste_solutions,
         verify_mode=verify_mode,
+        arena_number=anum,
     )
     state_path = os.path.join(arena_dir, "state.yaml")
     save_state(state, state_path)
@@ -257,6 +251,19 @@ def status(
             model = state.alias_mapping.get(alias, "unknown")
             parts = [f"{k}={v}" for k, v in meta.items()]
             typer.echo(f"  {alias} ({model}): {', '.join(parts)}")
+
+    if state.verify_scores or state.verify_votes:
+        typer.echo("Voting:")
+        for alias in state.alias_mapping:
+            model = state.alias_mapping.get(alias, "unknown")
+            score = state.verify_scores.get(alias, "N/A")
+            votes = state.verify_votes.get(alias, [])
+            typer.echo(f"  {alias} ({model}): score={score}, voted for {votes}")
+        scores = list(state.verify_scores.values())
+        if scores:
+            typer.echo(f"  Final score: {min(scores)} (min)")
+        if state.verify_winner:
+            typer.echo(f"  Winner: {state.verify_winner}")
 
     if state.consensus_reached is not None:
         typer.echo(f"Consensus: {state.consensus_reached}")

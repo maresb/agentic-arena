@@ -6,11 +6,13 @@ import tempfile
 
 from arena.state import (
     ALIASES,
+    PHASE_NUMBERS,
     ArenaConfig,
     DEFAULT_MODELS,
     Phase,
     ProgressStatus,
     _aliases_for_count,
+    expected_path,
     init_state,
     load_state,
     resolve_model,
@@ -24,6 +26,7 @@ class TestArenaConfig:
         assert cfg.base_branch == "main"
         assert cfg.max_rounds == 3
         assert cfg.verify_commands == []
+        assert cfg.arena_number == 1
 
     def test_frozen(self) -> None:
         cfg = ArenaConfig(task="test", repo="r")
@@ -32,6 +35,23 @@ class TestArenaConfig:
             raise AssertionError("Should not allow mutation")
         except Exception:
             pass  # Expected — frozen model
+
+    def test_arena_number(self) -> None:
+        cfg = ArenaConfig(task="test", repo="r", arena_number=42)
+        assert cfg.arena_number == 42
+
+
+class TestPhaseEnum:
+    def test_three_phases_plus_done(self) -> None:
+        assert Phase.SOLVE == "solve"
+        assert Phase.EVALUATE == "evaluate"
+        assert Phase.REVISE == "revise"
+        assert Phase.DONE == "done"
+        # VERIFY should NOT exist
+        assert not hasattr(Phase, "VERIFY")
+
+    def test_phase_numbers(self) -> None:
+        assert PHASE_NUMBERS == {"solve": 1, "evaluate": 2, "revise": 3}
 
 
 class TestInitState:
@@ -76,14 +96,14 @@ class TestInitState:
         assert state.analyses == {}
         assert state.critiques == {}
         assert state.agent_ids == {}
-        assert state.judge_history == []
         assert state.verify_results == []
         assert state.verdict_history == []
+        assert state.verify_votes == {}
+        assert state.verify_scores == {}
 
-    def test_verify_idempotency_fields_default_none(self) -> None:
-        state = init_state(task="test", repo="r")
-        assert state.verify_judge is None
-        assert state.verify_prev_msg_count is None
+    def test_arena_number_passed_through(self) -> None:
+        state = init_state(task="test", repo="r", arena_number=7)
+        assert state.config.arena_number == 7
 
 
 class TestSaveAndLoad:
@@ -144,10 +164,11 @@ class TestSaveAndLoad:
         state.analyses = {"agent_a": "ana A"}
         state.critiques = {"agent_a": "crit A"}
         state.agent_ids = {"agent_a": "id-1", "agent_b": "id-2"}
-        state.judge_history = ["agent_a"]
         state.round = 2
         state.final_verdict = "All good"
         state.consensus_reached = True
+        state.verify_votes = {"agent_a": ["agent_b"]}
+        state.verify_scores = {"agent_a": 9}
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "state.json")
             save_state(state, path)
@@ -225,6 +246,28 @@ class TestSaveAndLoad:
             assert loaded.config.task == "fallback test"
 
 
+class TestExpectedPath:
+    def test_solve_solution(self) -> None:
+        path = expected_path(3, 0, "solve", "agent_a", "solution")
+        assert path == "arenas/0003/00-1-solve-agent_a-solution.md"
+
+    def test_evaluate_critique(self) -> None:
+        path = expected_path(3, 0, "evaluate", "agent_b", "critique")
+        assert path == "arenas/0003/00-2-evaluate-agent_b-critique.md"
+
+    def test_evaluate_verdict_json(self) -> None:
+        path = expected_path(3, 0, "evaluate", "agent_c", "verdict", ext="json")
+        assert path == "arenas/0003/00-2-evaluate-agent_c-verdict.json"
+
+    def test_revise_solution(self) -> None:
+        path = expected_path(3, 1, "revise", "agent_a", "solution")
+        assert path == "arenas/0003/01-3-revise-agent_a-solution.md"
+
+    def test_high_arena_number(self) -> None:
+        path = expected_path(42, 0, "solve", "agent_a", "solution")
+        assert path == "arenas/0042/00-1-solve-agent_a-solution.md"
+
+
 class TestCustomModels:
     def test_init_with_custom_models(self) -> None:
         state = init_state(task="test", repo="r", models=["opus", "gpt"])
@@ -247,14 +290,6 @@ class TestCustomModels:
             "agent_e",
         ]
 
-    def test_paste_solutions_default(self) -> None:
-        state = init_state(task="test", repo="r")
-        assert state.config.paste_solutions is False
-
-    def test_paste_solutions_opt_in(self) -> None:
-        state = init_state(task="test", repo="r", paste_solutions=True)
-        assert state.config.paste_solutions is True
-
     def test_verify_mode_config(self) -> None:
         state = init_state(task="test", repo="r", verify_mode="gating")
         assert state.config.verify_mode == "gating"
@@ -271,9 +306,17 @@ class TestCustomModels:
         state.token_usage["agent_a"] = 5000
         assert state.token_usage["agent_a"] == 5000
 
-    def test_verify_progress_field(self) -> None:
+    def test_voting_fields(self) -> None:
         state = init_state(task="test", repo="r")
-        assert state.verify_progress == ProgressStatus.PENDING
+        assert state.verify_votes == {}
+        assert state.verify_scores == {}
+        assert state.verify_winner is None
+        state.verify_votes["agent_a"] = ["agent_b", "agent_c"]
+        state.verify_scores["agent_a"] = 9
+        state.verify_winner = "agent_b"
+        assert state.verify_votes["agent_a"] == ["agent_b", "agent_c"]
+        assert state.verify_scores["agent_a"] == 9
+        assert state.verify_winner == "agent_b"
 
     def test_agent_timing_field(self) -> None:
         state = init_state(task="test", repo="r")

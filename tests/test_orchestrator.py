@@ -1,5 +1,6 @@
 """Tests for the orchestrator and report generation."""
 
+import json
 import os
 import tempfile
 from unittest.mock import patch, MagicMock
@@ -19,7 +20,14 @@ class TestGenerateFinalReport:
         state = init_state(task="Test task", repo="owner/repo")
         state.round = 1
         state.consensus_reached = True
-        state.final_verdict = "All agents agree."
+        state.verify_winner = "agent_a"
+        state.verify_votes = {
+            "agent_a": ["agent_b"],
+            "agent_b": ["agent_a"],
+            "agent_c": ["agent_a"],
+        }
+        state.verify_scores = {"agent_a": 9, "agent_b": 9, "agent_c": 9}
+        state.final_verdict = json.dumps({"votes": state.verify_votes})
         state.solutions = {
             "agent_a": "Solution A",
             "agent_b": "Solution B",
@@ -45,7 +53,7 @@ class TestGenerateFinalReport:
             assert "Solution A" in content
             assert "Solution B" in content
             assert "Solution C" in content
-            assert "All agents agree." in content
+            assert "Voting Results" in content
 
     def test_report_without_consensus(self) -> None:
         state = init_state(task="Hard task", repo="owner/repo")
@@ -94,12 +102,37 @@ class TestGenerateFinalReport:
             assert "pixi run mypy ." in content
             assert "No type errors" in content
 
+    def test_report_includes_vote_breakdown(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.verify_votes = {"agent_a": ["agent_b"], "agent_b": ["agent_a"]}
+        state.verify_scores = {"agent_a": 8, "agent_b": 8}
+        state.verify_winner = "agent_a"
+        state.consensus_reached = True
+        state.solutions = {}
+        state.analyses = {}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate_final_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Voting Results" in content
+            assert "score=8" in content
+            assert "Winner" in content
+
 
 class TestArchiveRound:
     def test_archives_solutions_and_analyses(self) -> None:
         state = init_state(task="test", repo="r")
-        state.solutions = {"agent_a": "Sol A", "agent_b": "Sol B", "agent_c": "Sol C"}
-        state.analyses = {"agent_a": "Ana A", "agent_b": "Ana B", "agent_c": "Ana C"}
+        state.solutions = {
+            "agent_a": "Sol A",
+            "agent_b": "Sol B",
+            "agent_c": "Sol C",
+        }
+        state.analyses = {
+            "agent_a": "Ana A",
+            "agent_b": "Ana B",
+            "agent_c": "Ana C",
+        }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
@@ -108,9 +141,9 @@ class TestArchiveRound:
             analysis_files = [f for f in files if "analysis" in f]
             assert len(solution_files) == 3
             assert len(analysis_files) == 3
-            # Verify new naming format: {round}-{phase}-{model}-{type}-{uid}.md
+            # Verify new naming: {round}-{phase_num}-{phase}-{model}-{type}-{uid}.md
             for f in solution_files:
-                assert f.startswith("00-solve-")
+                assert f.startswith("00-1-solve-")
                 assert "-solution-" in f
                 assert f.endswith(".md")
 
@@ -125,22 +158,22 @@ class TestArchiveRound:
             files = os.listdir(tmpdir)
             critique_files = [f for f in files if "critique" in f]
             assert len(critique_files) == 1
-            assert critique_files[0].startswith("00-evaluate-")
+            assert critique_files[0].startswith("00-2-evaluate-")
 
-    def test_archives_verdict_on_done(self) -> None:
+    def test_archives_verdicts(self) -> None:
         state = init_state(task="test", repo="r")
         state.solutions = {}
         state.analyses = {}
-        state.phase = Phase.DONE
-        state.final_verdict = "All agents agree."
-        state.judge_history = ["agent_b"]
+        state.verify_votes = {"agent_a": ["agent_b"]}
+        state.verify_scores = {"agent_a": 9}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
             files = os.listdir(tmpdir)
             verdict_files = [f for f in files if "verdict" in f]
             assert len(verdict_files) == 1
-            assert verdict_files[0].startswith("00-verify-")
+            assert verdict_files[0].startswith("00-2-evaluate-")
+            assert verdict_files[0].endswith(".json")
 
     def test_empty_state_produces_no_files(self) -> None:
         state = init_state(task="test", repo="r")
@@ -150,7 +183,11 @@ class TestArchiveRound:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
-            files = [f for f in os.listdir(tmpdir) if f.endswith(".md")]
+            files = [
+                f
+                for f in os.listdir(tmpdir)
+                if f.endswith(".md") or f.endswith(".json")
+            ]
             assert files == []
 
     def test_archive_deduplication(self) -> None:
@@ -188,7 +225,7 @@ class TestStepOnce:
     def test_dispatches_solve_phase(self) -> None:
         """step_once should invoke the solve handler and save state."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            state = init_state(task="test", repo="r")
+            state = init_state(task="test", repo="owner/repo")
             save_state(state, os.path.join(tmpdir, "state.yaml"))
 
             mock_api = MagicMock()
@@ -196,7 +233,7 @@ class TestStepOnce:
             mock_api.launch.side_effect = lambda **kw: {"id": next(ids)}
             mock_api.status.return_value = {"status": "FINISHED"}
 
-            conversation = [
+            base_conversation = [
                 {
                     "role": "assistant",
                     "content": (
@@ -205,7 +242,24 @@ class TestStepOnce:
                     ),
                 }
             ]
-            mock_api.get_conversation.return_value = conversation
+
+            # Simulate conversation growth on followups
+            followup_counts: dict[str, int] = {}
+
+            def mock_followup(agent_id: str, prompt: str) -> dict:
+                followup_counts[agent_id] = followup_counts.get(agent_id, 0) + 1
+                return {"id": agent_id}
+
+            def mock_get_conversation(agent_id: str) -> list[dict]:
+                n = followup_counts.get(agent_id, 0)
+                result_conv = list(base_conversation)
+                for _ in range(n):
+                    result_conv.append({"role": "user", "content": "followup"})
+                    result_conv.append(dict(base_conversation[-1]))
+                return result_conv
+
+            mock_api.followup.side_effect = mock_followup
+            mock_api.get_conversation.side_effect = mock_get_conversation
 
             with patch("arena.orchestrator._make_api", return_value=mock_api):
                 result = step_once(arena_dir=tmpdir)
@@ -242,7 +296,6 @@ class TestArenaDirectoryNumbering:
             root = os.path.join(tmpdir, "arenas")
             os.makedirs(os.path.join(root, "0001"))
             os.makedirs(os.path.join(root, "readme"))
-            # .gitignore is a file, not a dir, but let's also add a non-numeric dir
             result = next_arena_dir(root)
             assert result == os.path.join(root, "0002")
 
