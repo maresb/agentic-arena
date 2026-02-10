@@ -283,25 +283,25 @@ class TestSaveAndLoad:
 
 
 class TestExpectedPath:
-    def test_solve_solution(self) -> None:
-        path = expected_path(3, 0, "solve", "agent_a", "solution")
-        assert path == "arenas/0003/00-1-solve-agent_a-solution.md"
+    def test_solution(self) -> None:
+        path = expected_path(3, "agent_a", "solution")
+        assert path == "arenas/0003/agent_a-solution.md"
 
-    def test_evaluate_critique(self) -> None:
-        path = expected_path(3, 0, "evaluate", "agent_b", "critique")
-        assert path == "arenas/0003/00-2-evaluate-agent_b-critique.md"
+    def test_critique(self) -> None:
+        path = expected_path(3, "agent_b", "critique")
+        assert path == "arenas/0003/agent_b-critique.md"
 
-    def test_evaluate_verdict_json(self) -> None:
-        path = expected_path(3, 0, "evaluate", "agent_c", "verdict", ext="json")
-        assert path == "arenas/0003/00-2-evaluate-agent_c-verdict.json"
+    def test_verdict_json(self) -> None:
+        path = expected_path(3, "agent_c", "verdict", ext="json")
+        assert path == "arenas/0003/agent_c-verdict.json"
 
-    def test_revise_solution(self) -> None:
-        path = expected_path(3, 1, "revise", "agent_a", "solution")
-        assert path == "arenas/0003/01-3-revise-agent_a-solution.md"
+    def test_analysis(self) -> None:
+        path = expected_path(3, "agent_a", "analysis")
+        assert path == "arenas/0003/agent_a-analysis.md"
 
     def test_high_arena_number(self) -> None:
-        path = expected_path(42, 0, "solve", "agent_a", "solution")
-        assert path == "arenas/0042/00-1-solve-agent_a-solution.md"
+        path = expected_path(42, "agent_a", "solution")
+        assert path == "arenas/0042/agent_a-solution.md"
 
 
 class TestCustomModels:

@@ -19,8 +19,8 @@ class TestSolvePrompt:
 
     def test_contains_file_paths(self) -> None:
         prompt = solve_prompt("task", "agent_a", 3, 0)
-        assert "arenas/0003/00-1-solve-agent_a-solution.md" in prompt
-        assert "arenas/0003/00-1-solve-agent_a-analysis.md" in prompt
+        assert "arenas/0003/agent_a-solution.md" in prompt
+        assert "arenas/0003/agent_a-analysis.md" in prompt
 
     def test_contains_section_headers(self) -> None:
         prompt = solve_prompt("task", "agent_a", 1, 0)
@@ -41,14 +41,14 @@ def _make_agent_files() -> list[tuple[str, str, str, str]]:
         (
             "agent_a",
             "cursor/branch-a",
-            "arenas/0001/00-1-solve-agent_a-solution.md",
-            "arenas/0001/00-1-solve-agent_a-analysis.md",
+            "arenas/0001/agent_a-solution.md",
+            "arenas/0001/agent_a-analysis.md",
         ),
         (
             "agent_b",
             "cursor/branch-b",
-            "arenas/0001/00-1-solve-agent_b-solution.md",
-            "arenas/0001/00-1-solve-agent_b-analysis.md",
+            "arenas/0001/agent_b-solution.md",
+            "arenas/0001/agent_b-analysis.md",
         ),
     ]
 
@@ -63,12 +63,11 @@ class TestEvaluatePrompt:
         prompt = evaluate_prompt("agent_b", _make_agent_files(), 1, 0)
         assert "cursor/branch-a" in prompt
         assert "git show" in prompt
-        assert "00-1-solve-agent_a-solution.md" in prompt
+        assert "agent_a-solution.md" in prompt
 
     def test_does_not_contain_solution_content(self) -> None:
         """Prompt should reference files, not paste content."""
         prompt = evaluate_prompt("agent_b", _make_agent_files(), 1, 0)
-        # The prompt should NOT contain literal solution text
         assert "origin/" in prompt  # branch ref
         assert "git show" in prompt  # fetch instruction
 
@@ -87,8 +86,8 @@ class TestEvaluatePrompt:
 
     def test_contains_file_paths(self) -> None:
         prompt = evaluate_prompt("agent_b", _make_agent_files(), 3, 0)
-        assert "arenas/0003/00-2-evaluate-agent_b-critique.md" in prompt
-        assert "arenas/0003/00-2-evaluate-agent_b-verdict.json" in prompt
+        assert "arenas/0003/agent_b-critique.md" in prompt
+        assert "arenas/0003/agent_b-verdict.json" in prompt
 
     def test_contains_commit_convention(self) -> None:
         prompt = evaluate_prompt("agent_a", _make_agent_files(), 1, 0)
@@ -104,9 +103,9 @@ class TestEvaluatePrompt:
 def _make_critique_files() -> list[tuple[str, str, str]]:
     """Build sample agent_critique_files for revise prompt tests."""
     return [
-        ("agent_a", "cursor/branch-a", "arenas/0001/00-2-evaluate-agent_a-critique.md"),
-        ("agent_b", "cursor/branch-b", "arenas/0001/00-2-evaluate-agent_b-critique.md"),
-        ("agent_c", "cursor/branch-c", "arenas/0001/00-2-evaluate-agent_c-critique.md"),
+        ("agent_a", "cursor/branch-a", "arenas/0001/agent_a-critique.md"),
+        ("agent_b", "cursor/branch-b", "arenas/0001/agent_b-critique.md"),
+        ("agent_c", "cursor/branch-c", "arenas/0001/agent_c-critique.md"),
     ]
 
 
@@ -123,12 +122,12 @@ class TestRevisePrompt:
     def test_contains_file_paths(self) -> None:
         prompt = revise_prompt(
             "agent_a",
-            [("agent_b", "cursor/b", "arenas/0003/01-2-evaluate-agent_b-critique.md")],
+            [("agent_b", "cursor/b", "arenas/0003/agent_b-critique.md")],
             3,
             1,
         )
-        assert "arenas/0003/01-3-revise-agent_a-solution.md" in prompt
-        assert "arenas/0003/01-3-revise-agent_a-analysis.md" in prompt
+        assert "arenas/0003/agent_a-solution.md" in prompt
+        assert "arenas/0003/agent_a-analysis.md" in prompt
 
     def test_contains_section_instructions(self) -> None:
         prompt = revise_prompt("agent_a", _make_critique_files(), 1, 0)

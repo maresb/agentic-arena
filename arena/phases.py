@@ -273,8 +273,8 @@ def step_solve(
             continue
 
         commit_desc = f"round {rnd:02d} solve {alias}"
-        sol_path = expected_path(anum, rnd, "solve", alias, "solution")
-        ana_path = expected_path(anum, rnd, "solve", alias, "analysis")
+        sol_path = expected_path(anum, alias, "solution")
+        ana_path = expected_path(anum, alias, "analysis")
 
         solution = _fetch_with_retry(
             state, alias, sol_path, api, commit_desc=commit_desc
@@ -322,15 +322,12 @@ def step_evaluate(
     anum = state.config.arena_number
     rnd = state.round
 
-    # Determine the phase name whose files we're evaluating
-    eval_phase = "solve" if rnd == 0 else "revise"
-
-    # Build branch file references for all agents
+    # Build branch file references for all agents (stable paths)
     agent_files: list[tuple[str, str, str, str]] = []
     for a in state.alias_mapping:
         branch = state.branch_names.get(a, "")
-        sol_path = expected_path(anum, rnd, eval_phase, a, "solution")
-        ana_path = expected_path(anum, rnd, eval_phase, a, "analysis")
+        sol_path = expected_path(anum, a, "solution")
+        ana_path = expected_path(anum, a, "analysis")
         agent_files.append((a, branch, sol_path, ana_path))
 
     # Send follow-ups to all agents
@@ -377,10 +374,8 @@ def step_evaluate(
             continue
 
         commit_desc = f"round {rnd:02d} evaluate {alias}"
-        critique_path = expected_path(anum, rnd, "evaluate", alias, "critique")
-        verdict_path = expected_path(
-            anum, rnd, "evaluate", alias, "verdict", ext="json"
-        )
+        critique_path = expected_path(anum, alias, "critique")
+        verdict_path = expected_path(anum, alias, "verdict", ext="json")
 
         # ── Critique extraction ──
         critique = _fetch_with_retry(
@@ -535,11 +530,11 @@ def step_revise(
     anum = state.config.arena_number
     rnd = state.round
 
-    # Build branch file references for critiques
+    # Build branch file references for critiques (stable paths)
     agent_critique_files: list[tuple[str, str, str]] = []
     for a in state.alias_mapping:
         branch = state.branch_names.get(a, "")
-        crit_path = expected_path(anum, rnd, "evaluate", a, "critique")
+        crit_path = expected_path(anum, a, "critique")
         agent_critique_files.append((a, branch, crit_path))
 
     # Send follow-ups
@@ -585,8 +580,8 @@ def step_revise(
             continue
 
         commit_desc = f"round {rnd:02d} revise {alias}"
-        sol_path = expected_path(anum, rnd, "revise", alias, "solution")
-        ana_path = expected_path(anum, rnd, "revise", alias, "analysis")
+        sol_path = expected_path(anum, alias, "solution")
+        ana_path = expected_path(anum, alias, "analysis")
 
         solution = _fetch_with_retry(
             state, alias, sol_path, api, commit_desc=commit_desc

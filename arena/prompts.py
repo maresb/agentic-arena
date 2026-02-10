@@ -50,8 +50,8 @@ def solve_prompt(
     round_num: int,
 ) -> str:
     """Generate the initial solve prompt."""
-    solution_path = expected_path(arena_number, round_num, "solve", alias, "solution")
-    analysis_path = expected_path(arena_number, round_num, "solve", alias, "analysis")
+    solution_path = expected_path(arena_number, alias, "solution")
+    analysis_path = expected_path(arena_number, alias, "analysis")
     commit_desc = f"round {round_num:02d} solve {alias}"
     return SOLVE_TEMPLATE.format(
         alias=alias,
@@ -140,12 +140,8 @@ def evaluate_prompt(
         )
     references_block = "\n\n".join(ref_blocks)
 
-    critique_path = expected_path(
-        arena_number, round_num, "evaluate", alias, "critique"
-    )
-    verdict_path = expected_path(
-        arena_number, round_num, "evaluate", alias, "verdict", ext="json"
-    )
+    critique_path = expected_path(arena_number, alias, "critique")
+    verdict_path = expected_path(arena_number, alias, "verdict", ext="json")
     commit_desc = f"round {round_num:02d} evaluate {alias}"
 
     return EVALUATE_TEMPLATE.format(
@@ -214,8 +210,8 @@ def revise_prompt(
         )
     references_block = "\n\n".join(ref_blocks)
 
-    solution_path = expected_path(arena_number, round_num, "revise", alias, "solution")
-    analysis_path = expected_path(arena_number, round_num, "revise", alias, "analysis")
+    solution_path = expected_path(arena_number, alias, "solution")
+    analysis_path = expected_path(arena_number, alias, "analysis")
     commit_desc = f"round {round_num:02d} revise {alias}"
 
     return REVISE_TEMPLATE.format(

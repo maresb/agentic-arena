@@ -186,18 +186,18 @@ def resolve_model(state: ArenaState, name: str) -> str:
 
 def expected_path(
     arena_number: int,
-    round_num: int,
-    phase_name: str,
     alias: str,
     artifact: str,
     ext: str = "md",
 ) -> str:
-    """Build the expected file path for an agent-committed output.
+    """Build the stable file path for an agent-committed output.
 
-    Returns e.g. ``arenas/0003/00-1-solve-agent_a-solution.md``.
+    Returns e.g. ``arenas/0003/agent_a-solution.md``.
+
+    Paths are intentionally round/phase-agnostic so agents overwrite
+    the same file each round, producing meaningful git diffs.
     """
-    phase_num = PHASE_NUMBERS[phase_name]
-    return f"arenas/{arena_number:04d}/{round_num:02d}-{phase_num}-{phase_name}-{alias}-{artifact}.{ext}"
+    return f"arenas/{arena_number:04d}/{alias}-{artifact}.{ext}"
 
 
 # ---------------------------------------------------------------------------
