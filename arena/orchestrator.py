@@ -26,7 +26,42 @@ from arena.state import (
     save_state,
 )
 
-DEFAULT_ARENA_DIR = "arenas/0001"
+ARENAS_ROOT = "arenas"
+
+
+def _ensure_gitignore(root: str) -> None:
+    """Create a .gitignore in *root* with ``*`` if it doesn't exist."""
+    gitignore = os.path.join(root, ".gitignore")
+    if not os.path.exists(gitignore):
+        os.makedirs(root, exist_ok=True)
+        with open(gitignore, "w") as f:
+            f.write("*\n")
+
+
+def next_arena_dir(root: str = ARENAS_ROOT) -> str:
+    """Return the path for the next sequentially-numbered arena directory.
+
+    Scans *root* for existing ``NNNN`` subdirectories and returns
+    ``root/NNNN+1``.  Creates the *root* directory (and ``.gitignore``)
+    if needed.
+    """
+    _ensure_gitignore(root)
+    existing = sorted(
+        int(d) for d in (os.listdir(root) if os.path.isdir(root) else []) if d.isdigit()
+    )
+    next_num = (existing[-1] + 1) if existing else 1
+    return os.path.join(root, f"{next_num:04d}")
+
+
+def latest_arena_dir(root: str = ARENAS_ROOT) -> str | None:
+    """Return the most recent arena directory, or ``None`` if none exist."""
+    if not os.path.isdir(root):
+        return None
+    numbered = sorted((int(d), d) for d in os.listdir(root) if d.isdigit())
+    if not numbered:
+        return None
+    return os.path.join(root, numbered[-1][1])
+
 
 logger = logging.getLogger("arena")
 
@@ -245,7 +280,7 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     logger.info("Final report written to %s", report_path)
 
 
-def step_once(arena_dir: str = DEFAULT_ARENA_DIR) -> ArenaState:
+def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
     """Execute exactly one phase transition and return the updated state.
 
     This is the core FSM primitive.  It loads the state, dispatches the
@@ -284,7 +319,7 @@ def step_once(arena_dir: str = DEFAULT_ARENA_DIR) -> ArenaState:
     return state
 
 
-def run_orchestrator(arena_dir: str = DEFAULT_ARENA_DIR) -> None:
+def run_orchestrator(arena_dir: str = ARENAS_ROOT) -> None:
     """Loop :func:`step_once` until the arena is complete, then report."""
     while True:
         state = step_once(arena_dir)

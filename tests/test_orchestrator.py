@@ -4,7 +4,13 @@ import os
 import tempfile
 from unittest.mock import patch, MagicMock
 
-from arena.orchestrator import _archive_round, generate_final_report, step_once
+from arena.orchestrator import (
+    _archive_round,
+    generate_final_report,
+    latest_arena_dir,
+    next_arena_dir,
+    step_once,
+)
 from arena.state import Phase, init_state, save_state
 
 
@@ -206,3 +212,69 @@ class TestStepOnce:
 
             assert result.phase == Phase.EVALUATE
             assert len(result.agent_ids) == 3
+
+
+class TestArenaDirectoryNumbering:
+    def test_next_arena_dir_starts_at_0001(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            result = next_arena_dir(root)
+            assert result == os.path.join(root, "0001")
+
+    def test_next_arena_dir_increments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            os.makedirs(os.path.join(root, "0001"))
+            os.makedirs(os.path.join(root, "0002"))
+            result = next_arena_dir(root)
+            assert result == os.path.join(root, "0003")
+
+    def test_next_arena_dir_skips_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            os.makedirs(os.path.join(root, "0001"))
+            os.makedirs(os.path.join(root, "0005"))
+            result = next_arena_dir(root)
+            assert result == os.path.join(root, "0006")
+
+    def test_next_arena_dir_ignores_non_numeric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            os.makedirs(os.path.join(root, "0001"))
+            os.makedirs(os.path.join(root, "readme"))
+            # .gitignore is a file, not a dir, but let's also add a non-numeric dir
+            result = next_arena_dir(root)
+            assert result == os.path.join(root, "0002")
+
+    def test_next_arena_dir_creates_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            next_arena_dir(root)
+            gitignore = os.path.join(root, ".gitignore")
+            assert os.path.exists(gitignore)
+            with open(gitignore) as f:
+                assert f.read() == "*\n"
+
+    def test_next_arena_dir_does_not_overwrite_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            os.makedirs(root)
+            gitignore = os.path.join(root, ".gitignore")
+            with open(gitignore, "w") as f:
+                f.write("custom\n")
+            next_arena_dir(root)
+            with open(gitignore) as f:
+                assert f.read() == "custom\n"
+
+    def test_latest_arena_dir_returns_none_when_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            assert latest_arena_dir(root) is None
+
+    def test_latest_arena_dir_returns_highest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, "arenas")
+            os.makedirs(os.path.join(root, "0001"))
+            os.makedirs(os.path.join(root, "0003"))
+            os.makedirs(os.path.join(root, "0002"))
+            assert latest_arena_dir(root) == os.path.join(root, "0003")

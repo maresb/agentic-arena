@@ -20,8 +20,9 @@ from dotenv import load_dotenv
 load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
 from arena.orchestrator import (  # noqa: E402
-    DEFAULT_ARENA_DIR,
     generate_final_report,
+    latest_arena_dir,
+    next_arena_dir,
     run_orchestrator,
     step_once,
 )
@@ -100,10 +101,16 @@ def init(
         ),
     ] = "advisory",
     arena_dir: Annotated[
-        str, typer.Option(help="Directory for arena state and outputs")
-    ] = DEFAULT_ARENA_DIR,
+        str | None, typer.Option(help="Directory for arena state and outputs")
+    ] = None,
 ) -> None:
-    """Initialize a new arena run."""
+    """Initialize a new arena run.
+
+    When ``--arena-dir`` is omitted, a new sequentially-numbered
+    directory under ``arenas/`` is created automatically.
+    """
+    if arena_dir is None:
+        arena_dir = next_arena_dir()
     parsed_commands = verify_commands.split(",") if verify_commands else None
     parsed_models = (
         [m.strip() for m in models.split(",") if m.strip()] if models else None
@@ -133,16 +140,31 @@ def init(
     typer.echo(f"\nRun the arena with: python -m arena run --arena-dir {arena_dir}")
 
 
+def _resolve_arena_dir(arena_dir: str | None) -> str:
+    """Resolve *arena_dir*, defaulting to the latest numbered directory."""
+    if arena_dir is not None:
+        return arena_dir
+    resolved = latest_arena_dir()
+    if resolved is None:
+        typer.echo("No arena runs found. Use 'python -m arena init' first.")
+        raise typer.Exit(code=1)
+    return resolved
+
+
 @app.command()
 def run(
     arena_dir: Annotated[
-        str, typer.Option(help="Directory for arena state and outputs")
-    ] = DEFAULT_ARENA_DIR,
+        str | None, typer.Option(help="Directory for arena state and outputs")
+    ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
     ] = False,
 ) -> None:
-    """Run the arena orchestrator."""
+    """Run the arena orchestrator.
+
+    When ``--arena-dir`` is omitted, uses the latest arena directory.
+    """
+    arena_dir = _resolve_arena_dir(arena_dir)
     _setup_logging(arena_dir, verbose=verbose)
     run_orchestrator(arena_dir=arena_dir)
 
@@ -150,13 +172,17 @@ def run(
 @app.command()
 def step(
     arena_dir: Annotated[
-        str, typer.Option(help="Directory for arena state and outputs")
-    ] = DEFAULT_ARENA_DIR,
+        str | None, typer.Option(help="Directory for arena state and outputs")
+    ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
     ] = False,
 ) -> None:
-    """Execute a single phase transition (one FSM step)."""
+    """Execute a single phase transition (one FSM step).
+
+    When ``--arena-dir`` is omitted, uses the latest arena directory.
+    """
+    arena_dir = _resolve_arena_dir(arena_dir)
     _setup_logging(arena_dir, verbose=verbose)
 
     state_path = os.path.join(arena_dir, "state.yaml")
@@ -185,10 +211,14 @@ def step(
 @app.command()
 def status(
     arena_dir: Annotated[
-        str, typer.Option(help="Directory for arena state and outputs")
-    ] = DEFAULT_ARENA_DIR,
+        str | None, typer.Option(help="Directory for arena state and outputs")
+    ] = None,
 ) -> None:
-    """Show the current state of the arena."""
+    """Show the current state of the arena.
+
+    When ``--arena-dir`` is omitted, uses the latest arena directory.
+    """
+    arena_dir = _resolve_arena_dir(arena_dir)
     state_path = os.path.join(arena_dir, "state.yaml")
     state = load_state(state_path)
     if state is None:
