@@ -247,10 +247,6 @@ class TestCustomModels:
             "agent_e",
         ]
 
-    def test_models_stored_in_config(self) -> None:
-        state = init_state(task="test", repo="r", models=["opus", "gpt"])
-        assert len(state.config.models) == 2
-
     def test_paste_solutions_default(self) -> None:
         state = init_state(task="test", repo="r")
         assert state.config.paste_solutions is False

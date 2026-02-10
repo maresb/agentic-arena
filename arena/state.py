@@ -83,7 +83,6 @@ class ArenaConfig(BaseModel, frozen=True):
     base_branch: str = "main"
     max_rounds: int = Field(default=3, ge=1, le=10)
     verify_commands: list[str] = Field(default_factory=list)
-    models: list[str] = Field(default_factory=lambda: list(DEFAULT_MODELS))
     paste_solutions: bool = False
     verify_mode: str = Field(default="advisory", pattern=r"^(advisory|gating)$")
     context_mode: str = "full"  # "full" (paste all), "diff" (git diff only), "fresh" (new agents each round)
@@ -439,7 +438,6 @@ def init_state(
         base_branch=base_branch,
         max_rounds=max_rounds,
         verify_commands=verify_commands or [],
-        models=model_list,
         paste_solutions=paste_solutions,
         verify_mode=verify_mode,
     )
