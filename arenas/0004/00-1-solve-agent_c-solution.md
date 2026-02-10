@@ -1,4 +1,4 @@
-## PLAN
+## PLAN — Numbered key decisions with rationale.
 
 1.  **Model Selection & Analysis**:
     *   Selected **Qwen2.5-VL-72B-Instruct** (or the latest Qwen-VL variant available on Ollama).
@@ -18,7 +18,7 @@
         3.  Store $D$ + Metadata.
         4.  (Future) Train a text classifier on $D$.
 
-## CHANGES
+## CHANGES — Unified diff or precise change descriptions.
 
 No code changes were requested or required for this task. The output consists of this solution file and the accompanying analysis file.
 

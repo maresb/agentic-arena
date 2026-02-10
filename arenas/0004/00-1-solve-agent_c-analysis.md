@@ -1,4 +1,4 @@
-## RISKS
+## RISKS — Known risks, edge cases, trade-offs.
 
 1.  **Hallucination with Dense Text**: While Qwen2.5-VL-72B is excellent, extremely dense information (e.g., small terminal fonts, large spreadsheets) can still lead to hallucinations or skipped content. The model might summarize "a terminal with code" rather than reading every line.
     *   *Mitigation*: Use prompting strategies that request verbatim extraction of specific areas (e.g., "Read the last 10 lines of the terminal") rather than full screen OCR if not needed.
@@ -9,7 +9,7 @@
 4.  **Privacy Concerns**: Although local, logs might inadvertently capture sensitive data (passwords, private chats) visible on screen.
     *   *Mitigation*: Implement a redaction step or simply avoid running the tool during sensitive work. Since it's local, data leakage is minimized, but local logs should be secured.
 
-## OPEN QUESTIONS
+## OPEN QUESTIONS — Uncertainties requiring verification.
 
 1.  **Ollama Implementation Specifics**: Does the current installed version of Ollama fully support the dynamic resolution features of Qwen2.5-VL without hidden resizing?
     *   *Verification Needed*: Check the `ollama` logs or model configuration to confirm that the input resolution is not being silently capped (e.g., at 1024x1024 or similar defaults in some backends).
