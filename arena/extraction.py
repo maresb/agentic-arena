@@ -20,13 +20,31 @@ logger = logging.getLogger("arena")
 # ---------------------------------------------------------------------------
 
 
+class Divergence(BaseModel):
+    """A specific remaining divergence between agent solutions."""
+
+    topic: str = ""
+    description: str = ""
+
+
 class VoteVerdict(BaseModel):
-    """Structured verdict parsed from an agent's verdict.json file."""
+    """Structured verdict parsed from an agent's verdict.json file.
+
+    The ``divergences`` list replaces the old ``remaining_disagreements``
+    count, forcing agents to enumerate specific issues rather than
+    reporting a vague number.
+
+    Bidirectional enforcement:
+    - Empty divergences → score must be 10  (full convergence)
+    - Non-empty divergences → score must be ≤ 9
+    """
 
     convergence_score: int | None = None
     best_solutions: list[str] = Field(default_factory=list)
-    remaining_disagreements: int | str | None = None
+    divergences: list[Divergence] = Field(default_factory=list)
     rationale: str | None = None
+    # Legacy field — accepted during parsing but not used for new verdicts.
+    remaining_disagreements: int | str | None = Field(default=None, exclude=True)
 
 
 def _normalize_alias(raw: str) -> str:
@@ -36,6 +54,30 @@ def _normalize_alias(raw: str) -> str:
     Convert to lowercase and replace spaces with underscores.
     """
     return raw.strip().lower().replace(" ", "_")
+
+
+def _enforce_divergence_score(verdict: VoteVerdict) -> None:
+    """Enforce bidirectional divergence/score constraint in place.
+
+    - Empty divergences → score must be 10
+    - Non-empty divergences → score must be ≤ 9
+    """
+    if verdict.convergence_score is None:
+        return
+    has_divergences = len(verdict.divergences) > 0
+    if not has_divergences and verdict.convergence_score < 10:
+        logger.warning(
+            "No divergences listed but score=%d; overriding to 10",
+            verdict.convergence_score,
+        )
+        verdict.convergence_score = 10
+    elif has_divergences and verdict.convergence_score >= 10:
+        logger.warning(
+            "%d divergences listed but score=%d; capping at 9",
+            len(verdict.divergences),
+            verdict.convergence_score,
+        )
+        verdict.convergence_score = 9
 
 
 def parse_vote_verdict_json(
@@ -67,6 +109,7 @@ def parse_vote_verdict_json(
                 logger.warning("Dropped unknown vote targets: %s", dropped)
             normalized = kept
         verdict.best_solutions = normalized
+        _enforce_divergence_score(verdict)
         return verdict
 
     # ── Primary: direct JSON parse ──
