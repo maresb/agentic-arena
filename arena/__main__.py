@@ -563,62 +563,37 @@ def add_comment(
     # ── Execute ──
     target_display = ", ".join(target_list)
 
+    # Both paths write to the sidecar file; "immediate" also delivers right away.
+    sidecar_path = os.path.join(arena_dir, PENDING_COMMENTS_FILE)
+    existing: list[dict] = []
+    if os.path.exists(sidecar_path):
+        try:
+            with open(sidecar_path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            existing = []
+
+    existing.append(
+        {
+            "message": message,
+            "wrapped": wrap,
+            "targets": target_list,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    with open(sidecar_path, "w") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
+
     if delivery == "immediate":
         _setup_logging(arena_dir, verbose=verbose)
         from arena.orchestrator import _make_api  # noqa: E402
+        from arena.orchestrator import deliver_pending_comments  # noqa: E402
 
         api = _make_api()
-
-        from arena.api import wait_for_followup  # noqa: E402
-        from arena.orchestrator import OPERATOR_WRAP_TEMPLATE  # noqa: E402
-        from arena.phases import (  # noqa: E402
-            _save_conversation,
-            _update_token_usage,
-        )
-
-        final_message = (
-            OPERATOR_WRAP_TEMPLATE.format(message=message) if wrap else message
-        )
-
-        for alias in target_list:
-            agent_id = state.agent_ids.get(alias)
-            if not agent_id:
-                typer.echo(f"  Skipping {alias} — no agent_id")
-                continue
-            typer.echo(f"  Sending to {alias}...")
-            prev_count = len(api.get_conversation(agent_id))
-            api.followup(agent_id=agent_id, prompt=final_message)
-            wait_for_followup(api, agent_id, prev_count)
-
-            conversation = api.get_conversation(agent_id)
-            _update_token_usage(state, alias, conversation)
-            _save_conversation(state, state_path, alias, conversation)
-
-        save_state(state, state_path)
+        deliver_pending_comments(state, arena_dir, api)
         typer.echo(f"\nDelivered immediately to: {target_display}")
     else:
-        # Queue to sidecar file
-        sidecar_path = os.path.join(arena_dir, PENDING_COMMENTS_FILE)
-        existing: list[dict] = []
-        if os.path.exists(sidecar_path):
-            try:
-                with open(sidecar_path) as f:
-                    existing = json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                existing = []
-
-        existing.append(
-            {
-                "message": message,
-                "wrapped": wrap,
-                "targets": target_list,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-
-        with open(sidecar_path, "w") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
-
         typer.echo(
             f"\nQueued comment for: {target_display}\n"
             f"Will be delivered at the start of the next phase.\n"
