@@ -6,6 +6,7 @@
 - **Latency/UI contention:** Multi-window inference plus OCR passes can be slow and impact desktop responsiveness.
 - **JSON validity:** Long outputs can break JSON; requires repair/retry logic.
 - **OCR disagreement:** GLM-OCR and Qwen3-VL may disagree; requires conflict-resolution rules.
+- **OCR over-trust:** OCR can misread UI chrome (icons, small labels); avoid replacing semantically important UI labels without confidence checks.
 
 ## OPEN QUESTIONS — Uncertainties requiring verification.
 - What is the effective `max_pixels`/resize behavior in your Ollama build for Qwen3-VL?
@@ -14,6 +15,7 @@
 - How many window crops can be batched per request without exceeding context/VRAM limits?
 - Do you want a unified global description or only per-window records?
 - What change-detection threshold should trigger re-processing (hash delta, focus change)?
+- How accurate is GLM-OCR on UI screenshots (not just documents), and where should it override Qwen3-VL?
 
 ## DISAGREEMENTS — Any remaining substantive disagreements with other approaches, or "None."
 None.

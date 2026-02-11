@@ -21,6 +21,10 @@
 - Apache-2.0 license is simpler for consulting work.
 - 32B is fast and stable on 96GB VRAM while allowing larger visual token budgets.
 
+**What practitioners report (high-level)**
+- Qwen3-VL is strong on OCR and GUI tasks when image resizing is controlled, but is sensitive to silent downscaling.
+- Zooming or tiling improves fine-text accuracy compared to one-shot full-frame inference.
+
 **Why GLM-OCR**
 - OCR-first multimodal model with layout + recognition architecture.
 - Ideal for dense text (terminal logs, IDEs, PDFs) where VLMs tend to hallucinate.
@@ -50,6 +54,7 @@ Most runtimes enforce a pixel budget. You must set one of:
 - **explicit resized_width/resized_height**.
 
 For Qwen3-VL, resized dimensions should be **multiples of 32**. If you resize manually, disable any further resizing in the processor to avoid double-scaling.
+If you use a helper like `qwen-vl-utils` for resizing, ensure the model processor does not apply a second resize.
 
 **Recommended budgets to test**
 - **B = 2.1 MP** (about 1920x1088) for speed and good UI text.
@@ -119,6 +124,7 @@ Use landscape tiles that align with Qwen3-VL’s multiple-of-32 constraint:
 
 **GLM-OCR output**
 - Store OCR text separately and use it to verify or replace low-confidence text blocks.
+- If Qwen3-VL and GLM-OCR disagree, prefer GLM-OCR for verbatim text but keep Qwen3-VL’s UI/semantic summary.
 
 ### 6) Supplementary tools/workflows
 - **Capture:** `gnome-screenshot` or GNOME D-Bus screenshot portal (Wayland-safe).
