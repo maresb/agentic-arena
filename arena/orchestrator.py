@@ -192,6 +192,39 @@ def _archive_filename(
 # ---------------------------------------------------------------------------
 
 
+def _mermaid_vote_graph(
+    aliases: list[str],
+    alias_mapping: dict[str, str],
+    scores: dict,
+    votes: dict,
+) -> list[str]:
+    """Build a mermaid directed graph showing votes for one evaluate round.
+
+    Returns a list of lines (including the fenced code block markers).
+    Each node has three lines: alias (bold), model, and score.
+    Edges are bare arrows from voter to votee.
+    """
+    lines: list[str] = ["```mermaid", "graph"]
+
+    # Node declarations with multi-line markdown labels
+    for alias in aliases:
+        model = str(alias_mapping.get(alias, "unknown"))
+        score = scores.get(alias, "—")
+        # Mermaid markdown string: backtick-delimited, literal newlines
+        lines.append(f'    {alias}["`**{alias}**')
+        lines.append(f"{model}")
+        lines.append(f'Score: {score}`"]')
+
+    # Vote edges (bare arrows, no labels)
+    for alias in aliases:
+        for votee in votes.get(alias, []):
+            if votee in alias_mapping:
+                lines.append(f"    {alias} --> {votee}")
+
+    lines.append("```")
+    return lines
+
+
 def update_report(state: ArenaState, arena_dir: str) -> None:
     """Regenerate ``report.md`` from the current state.
 
@@ -228,6 +261,8 @@ def update_report(state: ArenaState, arena_dir: str) -> None:
     lines += ["", "---", ""]
 
     # ── Per-round sections (built from verdict_history) ──
+    prev_tokens: dict[str, int] = {}
+
     for rnd_idx, vh_json in enumerate(state.verdict_history):
         try:
             vh = json.loads(vh_json) if isinstance(vh_json, str) else vh_json
@@ -237,26 +272,59 @@ def update_report(state: ArenaState, arena_dir: str) -> None:
         rnd_votes: dict = vh.get("votes", {})
         rnd_scores: dict = vh.get("scores", {})
         rnd_divergences: dict = vh.get("divergences", {})
+        rnd_tokens: dict[str, int] = vh.get("token_usage", {})
 
         scores_list = list(rnd_scores.values())
         final_score = min(scores_list) if scores_list else 0
 
+        # Compute per-round token deltas
+        token_deltas: dict[str, int] = {}
+        for alias in state.alias_mapping:
+            cur = rnd_tokens.get(alias, 0)
+            prev = prev_tokens.get(alias, 0)
+            if cur > 0:
+                token_deltas[alias] = cur - prev
+
         lines.append(f"## Round {rnd_idx}")
         lines.append("")
 
-        # Score/vote table
-        lines.append("| Agent | Model | Score | Voted for | Divergences |")
-        lines.append("|-------|-------|------:|-----------|-------------|")
+        # Score/vote table (include token delta column if data exists)
+        has_tokens = bool(token_deltas)
+        if has_tokens:
+            lines.append("| Agent | Model | Score | Voted for | Divergences | Tokens |")
+            lines.append("|-------|-------|------:|-----------|-------------|-------:|")
+        else:
+            lines.append("| Agent | Model | Score | Voted for | Divergences |")
+            lines.append("|-------|-------|------:|-----------|-------------|")
         for alias in state.alias_mapping:
             model = str(state.alias_mapping.get(alias, "unknown"))
             score = rnd_scores.get(alias, "—")
             votes = ", ".join(rnd_votes.get(alias, []))
             divs = rnd_divergences.get(alias, [])
             div_count = len(divs) if isinstance(divs, list) else 0
-            lines.append(f"| {alias} | {model} | {score} | {votes} | {div_count} |")
+            if has_tokens:
+                delta = token_deltas.get(alias, 0)
+                lines.append(
+                    f"| {alias} | {model} | {score} | {votes} "
+                    f"| {div_count} | {delta:,} |"
+                )
+            else:
+                lines.append(f"| {alias} | {model} | {score} | {votes} | {div_count} |")
         lines.append("")
         lines.append(f"**Min score:** {final_score}")
         lines.append("")
+
+        # Mermaid vote diagram
+        aliases = list(state.alias_mapping.keys())
+        mermaid_lines = _mermaid_vote_graph(
+            aliases, dict(state.alias_mapping), rnd_scores, rnd_votes
+        )
+        lines.extend(mermaid_lines)
+        lines.append("")
+
+        # Carry forward token snapshot for next round's delta
+        if rnd_tokens:
+            prev_tokens = dict(rnd_tokens)
 
         # Divergence details (if any)
         all_divs = [
