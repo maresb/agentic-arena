@@ -1,68 +1,86 @@
-# Round 03 Evaluate — Agent A Critique
+# Round 04 Evaluate — Agent A Critique
 
 ## Agent C
 
 ### Strengths
-1. **Concise and complete.** Covers all consensus elements (model, quantization, window-aware
-   cropping, delta hashing, Step 0 check, maximized window sub-tiling, structured JSON, NixOS
-   config reference) in ~100 lines. The most efficient of the three solutions.
-2. **Clean pipeline logic.** Hash Check → Global Scan → Window Loop is easy to follow.
-3. **`ui_state` as string array** (`["sidebar_open", "terminal_visible"]`) is a lightweight
-   alternative to structured `ui_elements` that may be easier to classify on.
-4. **Maximized window sub-tiling** originated from Agent C and was adopted by all agents.
+1. **Complete pivot to Qwen3-VL + GLM-OCR.** Correctly adopted both models with proper
+   quantization (Q8_0), 32-aligned tiling, and dual-model inference.
+2. **Clean schema separation.** Uses `semantic_summary` (VLM) vs `extracted_text` (OCR)
+   as distinct fields — clear and self-documenting.
+3. **NixOS config correct.** `OLLAMA_MAX_LOADED_MODELS = "2"` matches the dual-model
+   requirement.
+4. **Concise.** Covers all decisions in ~100 lines without losing critical detail.
+5. **Maximized window edge case** (split into 2 vertical tiles) retained from earlier
+   rounds.
 
 ### Weaknesses
-1. **No pseudocode implementation.** The pipeline is described architecturally but not as
-   working code. Agents working from this would need to write the implementation from scratch.
-2. **Only 2 open questions.** Missing quantization A/B testing and newer model checks.
+1. **No pseudocode.** Architectural guidance only; implementation left to the user.
+2. **Only 2 open questions.** Missing pixel budget verification, quantization A/B
+   testing, and zoom tool viability.
 
 ### Errors
 - None.
+
+---
 
 ## Agent B
 
 ### Strengths
-1. **Now includes NixOS configuration** (adopted from Agent A in this round). Complete
-   `configuration.nix` snippet with Ollama CUDA setup.
-2. **Structured output schema** clearly separates GNOME-sourced bbox from model-generated
-   semantic regions. This distinction is important and well-documented.
-3. **Comprehensive risk list** (7 items) covering all key failure modes.
-4. **JSON reliability** explicitly addressed with format hints, repair, and retries.
+1. **Selective GLM-OCR usage.** Uniquely suggests running GLM-OCR only on text-heavy
+   windows (terminals, editors, browsers) and skipping it on image-heavy windows. This
+   is a pragmatic optimization that reduces latency without sacrificing quality where
+   it matters most.
+2. **Pixel budget guidance.** Explicitly offers two budget options (2.1 MP for speed,
+   4.2 MP for dense code) with clear trade-off description.
+3. **Comprehensive open questions** (6 items) including batching limits and change
+   detection thresholds.
+4. **OCR disagreement risk** explicitly identified — what to do when Qwen3-VL and
+   GLM-OCR produce conflicting text.
+5. **Clean "when to use which" section** clarifying role separation.
 
 ### Weaknesses
-1. **Still lists InternVL2.5-78B as fallback.** Qualified as "only if Qwen is unavailable,"
-   which is reasonable but adds unnecessary complexity to a unanimous recommendation.
-2. **No pseudocode.** Architectural guidance only, like Agent C.
+1. **NixOS config error.** Sets `OLLAMA_MAX_LOADED_MODELS = "1"` but the solution
+   requires running two models (Qwen3-VL + GLM-OCR). Should be `"2"`. This is the only
+   substantive error across all three solutions.
+2. **No pseudocode.** Architectural guidance only.
 
 ### Errors
-- None.
+1. `OLLAMA_MAX_LOADED_MODELS = "1"` contradicts the dual-model architecture. Must be
+   `"2"` to keep both models loaded simultaneously.
+
+---
 
 ## Agent A (Self)
 
 ### Strengths
-1. **Working pseudocode** with pyvips/Pillow fallback, occlusion skipping, maximized-window
-   sub-tiling with configurable `MAX_CROP_PIXELS`, and proper Ollama API calls.
-2. **NixOS configuration** directly usable by the user.
-3. **Convergence summary table** in analysis — clear at-a-glance reference.
-4. **Sub-tiling integrated into code** with overlap calculation.
+1. **Working pseudocode** with pyvips/Pillow fallback, tiling, dual-model inference,
+   and occlusion skipping.
+2. **Normalized output.** `vlm_descriptions` and `ocr_text` are always lists.
+3. **NixOS config correct** with `OLLAMA_MAX_LOADED_MODELS = "2"`.
+4. **Most detailed tile placement** with specific coordinate examples.
+5. **Zoom-in tool pathway** documented as future upgrade.
 
 ### Weaknesses
-1. **Longest solution** (~320 lines). The pseudocode adds value but increases length.
-2. **`descriptions` field type varies** — returns a string for single crops but a list for
-   sub-tiled windows. Should normalize to always be a list for simpler downstream parsing.
+1. **Runs GLM-OCR on every window.** Agent B's suggestion to run OCR selectively on
+   text-heavy windows is more efficient and should be adopted.
+2. **Longest solution** (~350 lines). Could be more concise.
 
 ### Errors
 - None.
 
+---
+
 ## Position
 
 ### Keeping
-Everything. The solution is final and fully converged.
+Everything from my current solution. The dual-model architecture, pseudocode, NixOS
+config, tiling math, and storage schema are all correct and converged.
 
 ### Adopting
-Nothing new — all cross-pollination is complete after three rounds.
+- **From Agent B:** Selective GLM-OCR usage — run OCR only on text-heavy windows
+  (terminals, editors, browsers, PDFs) and skip it on image-heavy windows (viewers,
+  dashboards with few text elements). This reduces total latency by ~30-40% for typical
+  desktops without sacrificing text fidelity where it matters.
 
 ### Disagreements
-**None.** All three solutions describe identical architecture with trivial presentation
-differences (verbosity, field names, whether pseudocode is included). No architectural,
-correctness, or logic disagreements remain.
+**None on architecture.** The only issue is Agent B's config typo (`OLLAMA_MAX_LOADED_MODELS = "1"` should be `"2"`).
