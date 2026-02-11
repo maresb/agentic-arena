@@ -237,7 +237,7 @@ class TestStepEvaluate:
 
     @patch("arena.phases.fetch_file_from_branch")
     def test_low_score_transitions_to_revise(self, mock_fetch: MagicMock) -> None:
-        """Score < 8 means no consensus -> transitions to REVISE."""
+        """Score < 9 means no consensus -> transitions to REVISE."""
         mock_fetch.side_effect = _branch_file_mock(
             verdict_json=_make_vote_json(score=5)
         ).side_effect
@@ -254,13 +254,13 @@ class TestStepEvaluate:
     def test_high_score_unanimous_reaches_consensus(
         self, mock_fetch: MagicMock
     ) -> None:
-        """Score >= 8 and unanimous vote -> consensus -> DONE."""
+        """Score >= 9 and unanimous vote -> consensus -> DONE."""
         state = self._make_solved_state()
         aliases = list(state.alias_mapping.keys())
         winner = aliases[0]
 
         mock_fetch.side_effect = _branch_file_mock(
-            verdict_json=_make_vote_json(score=9, best=[winner])
+            verdict_json=_make_vote_json(score=10, best=[winner])
         ).side_effect
         api = make_mock_api()
 
