@@ -15,10 +15,10 @@
         *   Crop individual windows at **native resolution** using GNOME metadata.
         *   **Rounding**: Ensure all crop dimensions are multiples of 32 (e.g., resize slightly if needed) to match Qwen3-VL's patch requirement.
         *   **Edge Case**: If a window > ~2MP (e.g. maximized), split into tiles of **1920x1088** (32-aligned) with overlap.
-    *   **Step 4 (Dual Inference)**:
-        *   Send crop to **Qwen3-VL** for semantic understanding ("What is this app? What is the user doing?").
-        *   Send crop to **GLM-OCR** for verbatim text extraction.
-        *   Merge results: Use GLM-OCR's text as the authoritative transcript.
+    *   **Step 4 (Selective Dual Inference)**:
+        *   **Qwen3-VL**: Always run for semantic understanding ("What is this app? What is the user doing?").
+        *   **GLM-OCR**: Run only on text-heavy windows (Code, Terminal, Browser, PDF) to save compute. Skip on image-heavy windows (Video players, ImageViewers).
+        *   **Merge**: Use GLM-OCR's text as the authoritative transcript when available.
 
 3.  **Data Structure**
     *   **Schema**:
@@ -65,6 +65,7 @@ The architecture has been completely updated from the previous Qwen2.5-VL single
     *   Added `glm-ocr` as a secondary model.
 2.  **Pipeline**:
     *   **Dual-Path**: Added logic to query both models for each window crop.
+    *   **Selective OCR**: Added logic to skip GLM-OCR on non-text-heavy windows (optimization from Agent B).
     *   **Tiling**: Updated default tile size to **1920x1088** (multiples of 32) instead of 1920x1080.
 3.  **Config**:
     *   Updated `OLLAMA_MAX_LOADED_MODELS` to 2.
