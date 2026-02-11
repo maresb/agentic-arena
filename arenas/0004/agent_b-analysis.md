@@ -7,6 +7,7 @@
 - **JSON validity:** Long outputs can break JSON; requires repair/retry logic.
 - **OCR disagreement:** GLM-OCR and Qwen3-VL may disagree; requires conflict-resolution rules.
 - **OCR over-trust:** OCR can misread UI chrome (icons, small labels); avoid replacing semantically important UI labels without confidence checks.
+- **Dual-model memory:** Serving two models can increase VRAM pressure; require `OLLAMA_MAX_LOADED_MODELS=2` and careful batching.
 
 ## OPEN QUESTIONS — Uncertainties requiring verification.
 - What is the effective `max_pixels`/resize behavior in your Ollama build for Qwen3-VL?

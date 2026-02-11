@@ -41,7 +41,8 @@ services.ollama = {
   enable = true;
   acceleration = "cuda";
   environmentVariables = {
-    OLLAMA_MAX_LOADED_MODELS = "1";
+    # Dual-model serving (Qwen3-VL + GLM-OCR)
+    OLLAMA_MAX_LOADED_MODELS = "2";
     OLLAMA_NUM_PARALLEL = "1";
   };
 };
@@ -59,6 +60,9 @@ If you use a helper like `qwen-vl-utils` for resizing, ensure the model processo
 **Recommended budgets to test**
 - **B = 2.1 MP** (about 1920x1088) for speed and good UI text.
 - **B = 4.2 MP** (about 2048x2048) for very small text and dense code.
+
+**Quantization starting point**
+- With 96GB VRAM, start with **Q8_0** for Qwen3-VL if latency is acceptable; fall back to **Q5/Q4** if VRAM or throughput becomes a bottleneck.
 
 ### 4) Screenshot preparation and chunking
 
