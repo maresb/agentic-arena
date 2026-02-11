@@ -1,6 +1,6 @@
 {
-  "convergence_score": 8,
+  "convergence_score": 6,
   "best_solutions": ["agent_a"],
-  "remaining_disagreements": 0,
-  "rationale": "Agent A provides the most complete, implementation-ready version with NixOS setup, JSON reliability, and edge-case handling. Agent C is concise but less detailed. Differences are mostly depth/formatting, so convergence is high."
+  "remaining_disagreements": 2,
+  "rationale": "Agent A remains the most complete and implementation-ready, but all solutions still recommend Qwen2.5-VL and omit an OCR-specialist despite updated 2026 guidance. These are substantive architecture differences, so convergence is limited."
 }
