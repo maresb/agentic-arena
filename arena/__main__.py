@@ -28,6 +28,7 @@ from arena.orchestrator import (  # noqa: E402
     arena_number_from_dir,
     latest_arena_dir,
     next_arena_dir,
+    reopen_arena,
     run_orchestrator,
     step_once,
 )
@@ -329,6 +330,10 @@ def add_comment(
         str | None,
         typer.Option("--message", "-m", help="Comment text (skips interactive prompt)"),
     ] = None,
+    file: Annotated[
+        str | None,
+        typer.Option("--file", "-f", help="Read comment text from a file path"),
+    ] = None,
     immediate: Annotated[
         bool,
         typer.Option(
@@ -376,8 +381,32 @@ def add_comment(
         typer.echo("No agents have been launched yet. Run at least one step first.")
         raise typer.Exit(code=1)
 
-    # Interactive mode is when --message is not provided (user types interactively)
-    _is_interactive = message is None
+    # Interactive mode: neither --message nor --file provided
+    _is_interactive = message is None and file is None
+
+    # ── Handle completed arena ──
+    if state.completed:
+        if _is_interactive:
+            typer.echo(
+                f"\nArena is completed (round {state.round}, "
+                f"phase: {state.phase.value})."
+            )
+            reopen = typer.confirm("Reopen arena for another round?", default=True)
+            if not reopen:
+                typer.echo("Aborting.")
+                raise typer.Exit(code=0)
+            reopen_arena(state)
+            save_state(state, state_path)
+            typer.echo(
+                f"Arena reopened — now at round {state.round}, "
+                f"phase: {state.phase.value}"
+            )
+        else:
+            typer.echo(
+                "Arena is completed. Run interactively (without --message / "
+                "--file) to reopen, or edit state.yaml manually."
+            )
+            raise typer.Exit(code=1)
 
     # ── Detect whether a step is in progress ──
     step_in_progress = any(
@@ -394,7 +423,7 @@ def add_comment(
                 raise typer.Exit(code=1)
     else:
         # Interactive or default: all agents
-        if message is None:
+        if _is_interactive:
             # Interactive target selection
             aliases = list(state.alias_mapping.keys())
             typer.echo("\nAvailable agents:")
@@ -452,8 +481,22 @@ def add_comment(
     else:
         delivery = "queue"
 
+    # ── Read file content (if any) ──
+    file_content: str | None = None
+    if file is not None:
+        file_path = os.path.expanduser(file)
+        if not os.path.isfile(file_path):
+            typer.echo(f"File not found: {file_path}")
+            raise typer.Exit(code=1)
+        with open(file_path) as fh:
+            file_content = fh.read()
+        if not file_content.strip():
+            typer.echo(f"File is empty: {file_path}")
+            raise typer.Exit(code=1)
+
     # ── Get message text ──
-    if message is None:
+    if message is None and file_content is None:
+        # Fully interactive: prompt for message
         typer.echo("\nEnter your message (end with an empty line):")
         lines: list[str] = []
         while True:
@@ -468,6 +511,12 @@ def add_comment(
         if not message.strip():
             typer.echo("Empty message — aborting.")
             raise typer.Exit(code=1)
+    elif message is not None and file_content is not None:
+        # Both --message and --file: preamble + file contents
+        message = message + "\n\n" + file_content
+    elif file_content is not None:
+        # --file only
+        message = file_content
 
     # ── Resolve wrapping ──
     # In non-interactive mode (--message flag), default to wrapping unless
@@ -480,6 +529,9 @@ def add_comment(
         )
     else:
         wrap = True
+
+    # At this point message is guaranteed to be a non-empty string
+    assert message is not None
 
     # ── Execute ──
     target_display = ", ".join(target_list)
