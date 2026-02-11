@@ -322,5 +322,9 @@ Research deliverable — no code changes to the existing codebase.
    latency ~30-40% without sacrificing text fidelity where it matters.
 2. `TEXT_HEAVY_APPS` set and `is_text_heavy()` function in pseudocode.
 3. `ocr_text` is an empty list (not absent) when GLM-OCR is skipped — consistent typing.
-4. All prior architecture retained: Qwen3-VL-32B, GLM-OCR, Q8_0, 32-aligned tiling,
+4. **OCR over-trust risk** (from Agent B): Added R5 in analysis — GLM-OCR can misread UI
+   chrome; use it as authoritative only for body text/code, not for UI element labels.
+5. **Conflict resolution guidance** (OQ7 in analysis) — when models disagree, prefer
+   GLM-OCR for body text and Qwen3-VL for semantic/UI context.
+6. All prior architecture retained: Qwen3-VL-32B, GLM-OCR, Q8_0, 32-aligned tiling,
    delta storage, Step 0 check, NixOS config, structured JSON, cross-check.

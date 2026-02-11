@@ -30,15 +30,25 @@ If a "non-text-heavy" app (e.g., file manager, dashboard) has significant visibl
 (notifications, labels, error dialogs), GLM-OCR will be skipped and Qwen3-VL's text
 extraction may be less reliable.
 
-**Mitigation:** The `is_text_heavy()` heuristic uses a broad set of app keywords. For
-unknown apps, default to running OCR (conservative). The user can refine the set over
-time based on classification feedback.
+**Mitigation:** The `is_text_heavy()` heuristic uses broad keywords. For unknown apps,
+default to running OCR (conservative). Refine the set with usage data.
 
-### R5. Qwen3-VL Runtime Compatibility
+### R5. OCR Over-Trust (adopted from Agent B)
+
+GLM-OCR can misread UI chrome — icons, small labels, decorative text — and produce
+confident but incorrect transcriptions. Blindly replacing Qwen3-VL's semantic labels
+with GLM-OCR output can degrade description quality for non-text UI elements.
+
+**Mitigation:** Use GLM-OCR as authoritative only for **body text, code blocks, and
+document content**. For UI element labels (buttons, tabs, menus), prefer Qwen3-VL's
+semantic understanding. Implement a conflict-resolution rule: if both models agree on
+a text string, high confidence; if they disagree, flag for review or keep both.
+
+### R6. Qwen3-VL Runtime Compatibility
 
 Minimum Ollama version required. Verify before deployment. Step 0 catches issues early.
 
-### R6. JSON Reliability / Wayland Geometry Access
+### R7. JSON Reliability / Wayland Geometry Access
 
 JSON repair + retry for malformed output. `gdbus` into Mutter for window geometry; fall
 back to grid tiling if unavailable on Wayland.
@@ -72,8 +82,14 @@ upgrade path from deterministic tiling to model-driven zoom.
 
 ### OQ6. Selective OCR Threshold Tuning
 
-What is the optimal set of "text-heavy" app types? Should unknown apps default to
-OCR-on or OCR-off? Recommend OCR-on for unknowns, refine with usage data.
+Optimal set of "text-heavy" app types? Should unknown apps default to OCR-on or off?
+Recommend OCR-on for unknowns, refine with usage data.
+
+### OQ7. GLM-OCR vs Qwen3-VL Conflict Resolution
+
+When GLM-OCR and Qwen3-VL disagree on text content, which takes precedence for which
+element types? Recommend: GLM-OCR for body text/code, Qwen3-VL for UI labels/semantic
+context. A/B test to validate.
 
 ---
 
