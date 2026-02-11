@@ -4,5 +4,5 @@
     "Agent A"
   ],
   "remaining_disagreements": 0,
-  "rationale": "Perfect convergence. All agents independently arrived at the identical architecture: Qwen2.5-VL-72B (Q4_K_M), window-aware cropping, delta hashing, and structured JSON output. Agent A's solution is the standout deliverable because it provides the most comprehensive implementation details, including critical NixOS configuration snippets and robust pseudocode that correctly handles edge cases like maximized window splitting and Z-order occlusion."
+  "rationale": "Perfect convergence. The arrival of the new `Qwen3-VL` and `GLM-OCR` recommendations fundamentally changes the model choice, but the core architecture (Window-Aware Cropping + Delta Storage) remains valid. Agent A correctly pivoted the entire stack: replacing Qwen2.5-VL-72B with Qwen3-VL-32B (GUI-specialized, newer), adding GLM-OCR (faithful text extraction), upgrading quantization to Q8_0 (32B fits easily), and updating technical details like 32-multiple tile dimensions and dual-model NixOS config."
 }
