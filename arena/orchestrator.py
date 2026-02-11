@@ -568,13 +568,13 @@ def deliver_pending_comments(
 ) -> int:
     """Deliver any queued operator comments from the sidecar file.
 
-    Reads ``pending-comments.json`` from *arena_dir*, sends each message
-    to the target agents via ``api.followup()``, waits for responses, and
-    deletes the file after successful delivery.
+    Reads ``pending-comments.json`` from *arena_dir*, fires all follow-ups
+    in parallel, waits for all responses, then saves conversations.
+    Deletes the sidecar file after successful delivery.
 
     Returns the number of comments delivered.
     """
-    from arena.api import wait_for_followup  # avoid circular at module level
+    from arena.api import wait_for_all_followups  # avoid circular at module level
 
     sidecar = os.path.join(arena_dir, PENDING_COMMENTS_FILE)
     if not os.path.exists(sidecar):
@@ -590,8 +590,11 @@ def deliver_pending_comments(
     if not isinstance(comments, list) or not comments:
         return 0
 
-    delivered = 0
     state_path = os.path.join(arena_dir, "state.yaml")
+
+    # Fire all follow-ups, collecting prev_counts for parallel waiting
+    pending: dict[str, tuple[str, int]] = {}  # alias -> (agent_id, prev_count)
+    delivered = 0
 
     for entry in comments:
         message: str = entry.get("message", "")
@@ -611,16 +614,21 @@ def deliver_pending_comments(
             prev_count = len(api.get_conversation(agent_id))
             logger.info("Delivering operator comment to %s", alias)
             api.followup(agent_id=agent_id, prompt=message)
-            wait_for_followup(api, agent_id, prev_count)
-
-            # Save conversation after delivery
-            conversation = api.get_conversation(agent_id)
-            from arena.phases import _save_conversation, _update_token_usage
-
-            _update_token_usage(state, alias, conversation)
-            _save_conversation(state, state_path, alias, conversation)
+            pending[alias] = (agent_id, prev_count)
 
         delivered += 1
+
+    # Wait for all agents in parallel
+    if pending:
+        wait_for_all_followups(api, pending)
+
+    # Save conversations after all deliveries complete
+    from arena.phases import _save_conversation, _update_token_usage
+
+    for alias, (agent_id, _prev_count) in pending.items():
+        conversation = api.get_conversation(agent_id)
+        _update_token_usage(state, alias, conversation)
+        _save_conversation(state, state_path, alias, conversation)
 
     # Remove sidecar after all comments are delivered
     try:
