@@ -455,3 +455,162 @@ class TestAddCommentCommand:
             )
             assert result.exit_code == 1
             assert "Cannot specify both" in result.output
+
+    def test_file_flag_reads_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            # Write a file to inject
+            file_path = os.path.join(tmpdir, "report.md")
+            with open(file_path, "w") as f:
+                f.write("# Research Report\n\nFindings here.")
+
+            # --file without --message is interactive: target (0=all),
+            # preamble (empty=skip), wrapping (y)
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-f",
+                    file_path,
+                    "--queue",
+                ],
+                input="0\n\ny\n",
+            )
+            assert result.exit_code == 0, result.output
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert len(data) == 1
+            assert "Research Report" in data[0]["message"]
+            assert "Findings here." in data[0]["message"]
+
+    def test_file_with_interactive_preamble(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            file_path = os.path.join(tmpdir, "data.txt")
+            with open(file_path, "w") as f:
+                f.write("file content")
+
+            # --file without --message: target (0=all), preamble text,
+            # empty line (end preamble), wrapping (y)
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-f",
+                    file_path,
+                    "--queue",
+                ],
+                input="0\nmy preamble\n\ny\n",
+            )
+            assert result.exit_code == 0, result.output
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert data[0]["message"] == "my preamble\n\nfile content"
+
+    def test_message_and_file_concatenated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            file_path = os.path.join(tmpdir, "data.txt")
+            with open(file_path, "w") as f:
+                f.write("file content")
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "preamble",
+                    "-f",
+                    file_path,
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 0
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert data[0]["message"] == "preamble\n\nfile content"
+
+    def test_file_not_found_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-f",
+                    "/nonexistent/path.txt",
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 1
+            assert "File not found" in result.output
+
+    def test_completed_arena_non_interactive_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+            # Mark arena as completed
+            state = load_state(os.path.join(tmpdir, "state.yaml"))
+            assert state is not None
+            state.completed = True
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "hello",
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 1
+            assert "completed" in result.output.lower()
+
+    def test_interactive_reopen_bumps_max_rounds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+            state_path = os.path.join(tmpdir, "state.yaml")
+            state = load_state(state_path)
+            assert state is not None
+            state.completed = True
+            state.consensus_reached = True
+            state.round = 3
+            state.config = state.config.model_copy(update={"max_rounds": 3})
+            save_state(state, state_path)
+
+            # Interactive input: confirm reopen (y), extra rounds (2),
+            # target (0=all), delivery mode (queue), message line,
+            # empty line (end message), wrapping (y)
+            result = runner.invoke(
+                app,
+                ["add-comment", "--arena-dir", tmpdir],
+                input="y\n2\n0\nqueue\ntest message\n\ny\n",
+            )
+            assert result.exit_code == 0, result.output
+            assert "max_rounds updated to 6" in result.output
+
+            reloaded = load_state(state_path)
+            assert reloaded is not None
+            assert reloaded.completed is False
+            assert reloaded.round == 4
+            assert reloaded.config.max_rounds == 6

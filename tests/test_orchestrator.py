@@ -14,6 +14,7 @@ from arena.orchestrator import (
     generate_final_report,
     latest_arena_dir,
     next_arena_dir,
+    reopen_arena,
     step_once,
     update_report,
 )
@@ -773,3 +774,78 @@ class TestDeliverPendingComments:
             delivered = deliver_pending_comments(state, tmpdir, api)
             assert delivered == 0
             assert api.followup.call_count == 0
+
+
+class TestReopenArena:
+    """Tests for the reopen_arena helper."""
+
+    def _make_completed_state(self) -> ArenaState:
+        state = init_state(task="test", repo="r")
+        for alias in state.alias_mapping:
+            state.agent_ids[alias] = f"agent-{alias}"
+        state.completed = True
+        state.consensus_reached = True
+        state.phase = Phase.EVALUATE  # type: ignore[assignment]
+        state.round = 2
+        state.final_verdict = "some verdict"
+        state.verify_votes = {"agent_a": ["agent_b"]}
+        state.verify_scores = {"agent_a": 10}
+        state.verify_divergences = {"agent_a": []}
+        state.verify_winner = "agent_a"
+        state.verify_results = ["ok"]
+        state.critiques = {"agent_a": "critique text"}
+        state.sent_msg_counts = {"agent_a": 5}
+        return state
+
+    def test_resets_completion_flags(self) -> None:
+        state = self._make_completed_state()
+        reopen_arena(state)
+
+        assert state.completed is False
+        assert state.consensus_reached is None
+        assert state.final_verdict is None
+
+    def test_increments_round(self) -> None:
+        state = self._make_completed_state()
+        assert state.round == 2
+        reopen_arena(state)
+        assert state.round == 3
+
+    def test_sets_phase_to_generate(self) -> None:
+        state = self._make_completed_state()
+        reopen_arena(state)
+        assert state.phase == Phase.GENERATE
+
+    def test_resets_progress_to_pending(self) -> None:
+        state = self._make_completed_state()
+        reopen_arena(state)
+        from arena.state import ProgressStatus
+
+        for alias in state.alias_mapping:
+            assert state.phase_progress[alias] == ProgressStatus.PENDING
+
+    def test_clears_transient_state(self) -> None:
+        state = self._make_completed_state()
+        reopen_arena(state)
+
+        assert state.critiques == {}
+        assert state.verify_votes == {}
+        assert state.verify_scores == {}
+        assert state.verify_divergences == {}
+        assert state.verify_winner is None
+        assert state.verify_results == []
+        assert state.sent_msg_counts == {}
+
+    def test_preserves_agent_ids(self) -> None:
+        state = self._make_completed_state()
+        original_ids = dict(state.agent_ids)
+        reopen_arena(state)
+        assert state.agent_ids == original_ids
+
+    def test_preserves_solutions_and_analyses(self) -> None:
+        state = self._make_completed_state()
+        state.solutions = {"agent_a": "sol"}
+        state.analyses = {"agent_a": "analysis"}
+        reopen_arena(state)
+        assert state.solutions == {"agent_a": "sol"}
+        assert state.analyses == {"agent_a": "analysis"}

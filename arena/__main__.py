@@ -381,8 +381,21 @@ def add_comment(
         typer.echo("No agents have been launched yet. Run at least one step first.")
         raise typer.Exit(code=1)
 
-    # Interactive mode: neither --message nor --file provided
-    _is_interactive = message is None and file is None
+    # Interactive mode: --message not provided (--file alone still interactive)
+    _is_interactive = message is None
+
+    # ── Read file content early (fail fast on bad path) ──
+    file_content: str | None = None
+    if file is not None:
+        file_path = os.path.expanduser(file)
+        if not os.path.isfile(file_path):
+            typer.echo(f"File not found: {file_path}")
+            raise typer.Exit(code=1)
+        with open(file_path) as fh:
+            file_content = fh.read()
+        if not file_content.strip():
+            typer.echo(f"File is empty: {file_path}")
+            raise typer.Exit(code=1)
 
     # ── Handle completed arena ──
     if state.completed:
@@ -396,6 +409,22 @@ def add_comment(
                 typer.echo("Aborting.")
                 raise typer.Exit(code=0)
             reopen_arena(state)
+
+            # Check whether max_rounds needs bumping
+            if state.round >= state.config.max_rounds:
+                typer.echo(
+                    f"\nCurrent round ({state.round}) meets or exceeds "
+                    f"max_rounds ({state.config.max_rounds})."
+                )
+                extra = typer.prompt(
+                    "How many additional rounds to allow?",
+                    type=int,
+                    default=1,
+                )
+                new_max = state.round + extra
+                state.config = state.config.model_copy(update={"max_rounds": new_max})
+                typer.echo(f"max_rounds updated to {state.config.max_rounds}")
+
             save_state(state, state_path)
             typer.echo(
                 f"Arena reopened — now at round {state.round}, "
@@ -481,23 +510,16 @@ def add_comment(
     else:
         delivery = "queue"
 
-    # ── Read file content (if any) ──
-    file_content: str | None = None
-    if file is not None:
-        file_path = os.path.expanduser(file)
-        if not os.path.isfile(file_path):
-            typer.echo(f"File not found: {file_path}")
-            raise typer.Exit(code=1)
-        with open(file_path) as fh:
-            file_content = fh.read()
-        if not file_content.strip():
-            typer.echo(f"File is empty: {file_path}")
-            raise typer.Exit(code=1)
-
     # ── Get message text ──
-    if message is None and file_content is None:
-        # Fully interactive: prompt for message
-        typer.echo("\nEnter your message (end with an empty line):")
+    if message is None:
+        # Interactive: prompt for message (even when --file is provided)
+        if file_content is not None:
+            typer.echo(
+                "\nFile loaded. Enter an optional preamble "
+                "(end with an empty line, or just press Enter to skip):"
+            )
+        else:
+            typer.echo("\nEnter your message (end with an empty line):")
         lines: list[str] = []
         while True:
             try:
@@ -507,16 +529,21 @@ def add_comment(
             if line == "":
                 break
             lines.append(line)
-        message = "\n".join(lines)
-        if not message.strip():
+        preamble = "\n".join(lines)
+
+        if file_content is not None:
+            # Preamble (possibly empty) + file contents
+            message = (
+                (preamble + "\n\n" + file_content) if preamble.strip() else file_content
+            )
+        elif preamble.strip():
+            message = preamble
+        else:
             typer.echo("Empty message — aborting.")
             raise typer.Exit(code=1)
-    elif message is not None and file_content is not None:
-        # Both --message and --file: preamble + file contents
-        message = message + "\n\n" + file_content
     elif file_content is not None:
-        # --file only
-        message = file_content
+        # --message and --file: preamble + file contents
+        message = message + "\n\n" + file_content
 
     # ── Resolve wrapping ──
     # In non-interactive mode (--message flag), default to wrapping unless
