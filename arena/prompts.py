@@ -73,8 +73,8 @@ def generate_prompt(
                 f"  Critique: git show origin/{branch}:{crit_path}"
             )
         critiques_block = (
-            "\nRead all agents' critiques by fetching them from their branches. "
-            "Use `git show` to read each file:\n\n"
+            "\nFirst run `git fetch origin` to update remote refs, "
+            "then read all agents' critiques using `git show`:\n\n"
             + "\n\n".join(ref_blocks)
             + "\n\nRead ALL critiques listed above before writing your revised solution.\n\n"
             "Produce your REVISED solution, incorporating the strongest elements "
@@ -104,8 +104,9 @@ def generate_prompt(
 # ---------------------------------------------------------------------------
 
 EVALUATE_TEMPLATE = """\
-You are {alias}. Read the solutions and analyses from all agents by
-fetching them from their branches. Use `git show` to read each file:
+You are {alias}. First run `git fetch origin` to ensure you have the latest
+remote branches. Then read the solutions and analyses from all agents using
+`git show`:
 
 {references_block}
 

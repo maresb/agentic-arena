@@ -113,6 +113,11 @@ class TestEvaluatePrompt:
         # Should tell agent to exclude self from voting
         assert "agent_a" in prompt
 
+    def test_contains_git_fetch_instruction(self) -> None:
+        """Evaluate prompts must instruct the agent to fetch remote refs first."""
+        prompt = evaluate_prompt("agent_a", _make_agent_files(), 1, 0)
+        assert "git fetch origin" in prompt
+
 
 def _make_critique_files() -> list[tuple[str, str, str]]:
     """Build sample agent_critique_files for revision prompt tests."""
@@ -163,6 +168,13 @@ class TestGeneratePromptRevision:
         )
         assert "[arena]" in prompt
         assert "LAST commit" in prompt
+
+    def test_contains_git_fetch_instruction(self) -> None:
+        """Revision prompts must instruct the agent to fetch remote refs first."""
+        prompt = generate_prompt(
+            "task", "agent_a", 1, 1, agent_critique_files=_make_critique_files()
+        )
+        assert "git fetch origin" in prompt
 
 
 class TestModelsMapping:
