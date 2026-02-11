@@ -22,6 +22,7 @@ from arena.state import (
     PHASE_NUMBERS,
     ArenaState,
     Phase,
+    ProgressStatus,
     load_state,
     sanitize_filename_component,
     save_state,
@@ -529,6 +530,29 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     """
     update_report(state, arena_dir)
     _write_winning_solution(state, arena_dir)
+
+
+def reopen_arena(state: ArenaState) -> None:
+    """Reset a completed arena so it can run another generate-evaluate cycle.
+
+    Increments the round counter, sets the phase to GENERATE, and clears
+    all per-round transient state and completion flags.  The caller is
+    responsible for persisting the state afterwards.
+    """
+    state.completed = False
+    state.consensus_reached = None
+    state.final_verdict = None
+    state.round += 1
+    state.phase = Phase.GENERATE
+    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
+    state.sent_msg_counts = {}
+    # Clear per-round transient state
+    state.critiques = {}
+    state.verify_votes = {}
+    state.verify_scores = {}
+    state.verify_divergences = {}
+    state.verify_winner = None
+    state.verify_results = []
 
 
 PENDING_COMMENTS_FILE = "pending-comments.json"
