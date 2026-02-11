@@ -1,18 +1,19 @@
-# Round 05 Evaluate — Agent A Critique
+# Round 06 Evaluate — Agent A Critique
 
 ## Agent C
 
 ### Strengths
-1. **Fully updated and correct.** Qwen3-VL-32B + GLM-OCR, Q8_0, 32-aligned tiles,
-   `OLLAMA_MAX_LOADED_MODELS = "2"`, selective OCR, delta hashing — all correct.
-2. **Adopted selective GLM-OCR.** Now includes logic to skip OCR on image-heavy windows,
-   matching the consensus optimization.
-3. **Clean schema.** `semantic_summary` + `extracted_text` as distinct fields.
-4. **Concise.** Complete coverage in ~100 lines.
+1. **Correct and complete.** Qwen3-VL-32B + GLM-OCR, Q8_0, 32-aligned tiles, selective
+   OCR, `OLLAMA_MAX_LOADED_MODELS = "2"`, OCR over-trust risk — all present and correct.
+2. **Selective OCR explicitly defined.** Clear policy: run GLM-OCR only on text-heavy
+   windows (Code, Terminal, Browser, PDF), skip image-heavy windows.
+3. **OCR over-trust risk.** Correctly notes GLM-OCR can misinterpret UI chrome; use
+   Qwen3-VL's semantic summary as ground truth for UI structure.
+4. **Concise.** Complete in ~100 lines. The most efficient presentation.
 
 ### Weaknesses
-1. **No pseudocode.** Still architectural guidance only.
-2. **Only 2 open questions.** Light compared to Agent B's 7 items.
+1. **Only 1 open question.** The sparsest risk/question coverage of the three agents.
+2. **No pseudocode.** Still architectural guidance only.
 
 ### Errors
 - None.
@@ -22,36 +23,33 @@
 ## Agent B
 
 ### Strengths
-1. **Comprehensive open questions** (7 items) — most thorough risk/question coverage,
-   including "OCR over-trust" (OCR misreading UI chrome) which is a novel and valid risk
-   not covered by other agents.
-2. **Pixel budget options.** Two concrete budgets (2.1 MP, 4.2 MP) with trade-offs.
-3. **Good "when to use which" section** for role separation.
-4. **Resolution control guidance.** Explicit about `min_pixels`/`max_pixels` and the
-   need to disable double-resizing in `qwen-vl-utils`.
+1. **Config error fixed.** `OLLAMA_MAX_LOADED_MODELS = "2"` is now correct — the last
+   remaining divergence from round 05 is resolved.
+2. **Pixel budget options.** Concrete guidance: 2.1 MP for speed, 4.2 MP for dense code.
+3. **Most comprehensive risk/question coverage.** 9 risks and 7 open questions.
+4. **Dual-model memory risk** explicitly called out as a separate item.
+5. **OCR over-trust** and **OCR disagreement** both addressed with clear resolution rules.
+6. **Quantization guidance now includes Q8_0.** "Start with Q8_0... fall back to Q5/Q4."
 
 ### Weaknesses
-1. **NixOS config still has `OLLAMA_MAX_LOADED_MODELS = "1"`.** This was flagged in
-   round 04 and remains unfixed. Must be `"2"` for dual-model serving.
-2. **Quantization not explicitly specified.** The solution doesn't state Q8_0 as the
-   recommended default. Agents A and C both explicitly recommend Q8_0.
+1. **No pseudocode.** Architectural guidance only.
 
 ### Errors
-1. `OLLAMA_MAX_LOADED_MODELS = "1"` contradicts dual-model architecture. Should be `"2"`.
+- None.
 
 ---
 
 ## Agent A (Self)
 
 ### Strengths
-1. **Working pseudocode** with selective OCR (`TEXT_HEAVY_APPS`, `is_text_heavy()`),
-   tiling, dual-model inference, and occlusion skipping.
-2. **Correct NixOS config** with `OLLAMA_MAX_LOADED_MODELS = "2"`.
-3. **Consistent typing.** `ocr_text` is always a list (empty when skipped).
-4. **New risk R4** (selective OCR missing text in unexpected places) with mitigation.
+1. **Working pseudocode** with selective OCR, tiling, dual-model inference, pyvips/Pillow
+   fallback, and occlusion skipping.
+2. **Correct NixOS config.**
+3. **7 risks, 7 open questions** including OCR over-trust and conflict resolution.
+4. **Consistent output typing** (`ocr_text` always a list).
 
 ### Weaknesses
-1. **Longest solution.** ~326 lines. Could be tighter without losing signal.
+1. **Longest solution.** ~330 lines. Could be more concise.
 
 ### Errors
 - None.
@@ -61,12 +59,13 @@
 ## Position
 
 ### Keeping
-Everything. The solution is final, correct, and incorporates all cross-agent feedback.
+Everything. The solution is final, correct, and incorporates all cross-agent feedback
+across 6 rounds.
 
 ### Adopting
-- **From Agent B:** The "OCR over-trust" risk — OCR can misread UI chrome (icons, small
-  labels). Worth noting that GLM-OCR output should not blindly replace Qwen3-VL's
-  semantic labels without confidence checks. This is a valid nuance.
+Nothing new — all cross-pollination is complete.
 
 ### Disagreements
-**None on architecture.** Agent B's config error is the only remaining issue.
+**None.** All three agents describe identical architecture. Agent B's config error is
+fixed. The only remaining differences are documentation style and completeness level,
+not architectural decisions.
