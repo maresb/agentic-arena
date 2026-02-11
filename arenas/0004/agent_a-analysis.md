@@ -4,57 +4,44 @@
 
 ### R1. Ollama May Silently Downscale Images
 
-**Highest priority.** Qwen3-VL continues the `min_pixels` / `max_pixels` pattern. The
-default pixel budget will downscale 4K images unless overridden. Qwen3-VL additionally
-supports explicit `resized_height` / `resized_width` (rounded to multiples of 32).
+**Highest priority.** Qwen3-VL's default pixel budget will downscale 4K images unless
+overridden. Dimensions must be multiples of 32. If using `qwen-vl-utils`, disable
+resizing in the processor to avoid double-resizing.
 
-**Critical detail:** If using `qwen-vl-utils` for resizing, disable resizing in the
-processor to avoid double-resizing.
-
-**Mitigation:** Step 0 sanity check. Window-aware cropping as primary defense (crops
-are naturally smaller). Sub-tile large windows with 32-aligned dimensions. If Ollama
-can't be configured, use vllm/llama.cpp with explicit pixel budget controls.
+**Mitigation:** Step 0 sanity check. Window-aware cropping. Sub-tile large windows with
+32-aligned dimensions. If Ollama can't be configured, use vllm/llama.cpp directly.
 
 ### R2. Hallucination of Screen Content
 
-Now structurally defended with the **dual-model cross-check:** GLM-OCR provides
-ground-truth text extraction; if Qwen3-VL claims text that GLM-OCR does not find,
-mark as low confidence.
+Structurally defended with **dual-model cross-check** on text-heavy windows: GLM-OCR
+provides ground-truth text; if Qwen3-VL claims text GLM-OCR doesn't find, mark as low
+confidence. Additional: anti-hallucination prompts, temperature=0, structured JSON.
 
-Additional mitigations: anti-hallucination prompts (`[illegible]`), temperature=0,
-structured JSON, window title grounding.
+### R3. Processing Latency
 
-### R3. Processing Latency (dual-model overhead)
+With selective OCR, dual-model cost applies only to text-heavy windows. Estimated:
+~60-100s for 3-5 windows (vs ~60-125s if OCR runs on all windows).
 
-Dual-model processing per window: Qwen3-VL (~10-20s) + GLM-OCR (~2-5s). Total for
-3-5 windows: ~60-125s. The 32B Qwen3-VL is faster than the old 72B recommendation,
-partially offsetting the added OCR pass.
+**Mitigation:** Delta detection, active-window-only sampling, GLM-OCR's tiny size.
 
-**Mitigation:** Delta detection skips unchanged frames. Active-window-only sampling for
-routine captures. GLM-OCR is tiny and adds minimal latency. For higher throughput,
-run GLM-OCR only on text-heavy windows (terminals, editors, browsers) and skip it on
-image-heavy windows (viewers, dashboards).
+### R4. Selective OCR May Miss Text in Unexpected Places
 
-### R4. Qwen3-VL Runtime Compatibility
+If a "non-text-heavy" app (e.g., file manager, dashboard) has significant visible text
+(notifications, labels, error dialogs), GLM-OCR will be skipped and Qwen3-VL's text
+extraction may be less reliable.
 
-Practitioners report accuracy depends on correct image resizing and coordinate
-conventions. The Ollama model card indicates a minimum Ollama version for Qwen3-VL.
+**Mitigation:** The `is_text_heavy()` heuristic uses a broad set of app keywords. For
+unknown apps, default to running OCR (conservative). The user can refine the set over
+time based on classification feedback.
 
-**Mitigation:** Verify Ollama version compatibility. Test with Step 0 before building
-the full pipeline.
+### R5. Qwen3-VL Runtime Compatibility
 
-### R5. Structured JSON Reliability
+Minimum Ollama version required. Verify before deployment. Step 0 catches issues early.
 
-LLMs can emit malformed JSON. Use Ollama's `format: "json"` if available, `json-repair`
-package, retry up to 2 times on parse failure.
+### R6. JSON Reliability / Wayland Geometry Access
 
-### R6. GNOME Wayland Window Geometry Access
-
-GNOME extensions on Wayland have restricted access to global window geometry. If
-geometry is unavailable, must fall back to landscape grid tiling (2x2).
-
-**Mitigation:** Test `gdbus` query into Mutter. If unavailable, the grid fallback
-produces acceptable results with slightly more compute.
+JSON repair + retry for malformed output. `gdbus` into Mutter for window geometry; fall
+back to grid tiling if unavailable on Wayland.
 
 ---
 
@@ -62,31 +49,31 @@ produces acceptable results with slightly more compute.
 
 ### OQ1. Ollama's Pixel Budget for Qwen3-VL
 
-Does Ollama respect Qwen3-VL's `max_pixels` configuration? Can it be overridden in a
-Modelfile? Does the 32-multiple rounding work correctly? Must verify via Step 0.
+Does Ollama respect `max_pixels`? Can it be overridden in a Modelfile? Does 32-multiple
+rounding work? Verify via Step 0.
 
-### OQ2. GLM-OCR Availability and Quality on Desktop Screenshots
+### OQ2. GLM-OCR Availability and Desktop Screenshot Quality
 
-Is `glm-ocr` available in the user's Ollama build? How does it perform on desktop
-screenshots (vs documents)? Test on representative window crops. If unavailable or
-underperforming, Tesseract/PaddleOCR serve as OCR cross-check alternatives.
+Is `glm-ocr` in the user's Ollama build? How does it perform on UI screenshots vs
+documents? If unavailable, Tesseract/PaddleOCR are alternatives.
 
-### OQ3. GNOME Extension Window Geometry Export
+### OQ3. GNOME Extension Window Geometry
 
-Does the user's extension export (x, y, width, height) and z-order? If not, can `gdbus`
-query `global.get_window_actors()` for `meta_window.get_frame_rect()`?
+Does the extension export (x, y, w, h) and z-order? If not, `gdbus` or grid fallback.
 
-### OQ4. Optimal Quantization for Qwen3-VL-32B
+### OQ4. Optimal Quantization
 
-With 96 GB and a 32B model, Q8_0 should be comfortable. Verify empirically: does Q8_0
-vs Q6_K/Q4_K_M produce measurably better OCR on 12px+ text? The cost is higher latency;
-the benefit is higher precision.
+Q8_0 should be comfortable on 96 GB. Verify Q8_0 vs Q6_K on 12px+ text empirically.
 
 ### OQ5. Zoom Tool Viability
 
-Does the current Ollama build support Qwen3-VL's `image_zoom_in_tool`? Not needed for
-the initial prototype but determines the upgrade path from deterministic tiling to
-hybrid model-driven zoom.
+Does Ollama support Qwen3-VL's `image_zoom_in_tool`? Not needed now but determines the
+upgrade path from deterministic tiling to model-driven zoom.
+
+### OQ6. Selective OCR Threshold Tuning
+
+What is the optimal set of "text-heavy" app types? Should unknown apps default to
+OCR-on or OCR-off? Recommend OCR-on for unknowns, refine with usage data.
 
 ---
 
@@ -94,17 +81,15 @@ hybrid model-driven zoom.
 
 None.
 
-All three agents converged after receiving the updated model guidance. The consensus
-now covers all substantive decisions:
+All three agents converged on every substantive decision:
 
 | Decision | Consensus |
 |---|---|
 | Primary model | Qwen3-VL-32B Instruct |
-| Secondary OCR | GLM-OCR (~0.9B) |
+| Secondary OCR | GLM-OCR (~0.9B), selective on text-heavy windows |
 | Quantization | Q8_0 (32B fits easily in 96 GB) |
-| Primary strategy | Window-aware cropping (dual-model) |
-| Maximized window | Sub-tile into 32-aligned tiles |
-| Tile dimensions | 1920x1088, overlap 192x96 |
+| Primary strategy | Window-aware cropping (dual-model for text-heavy) |
+| Tile dimensions | 1920×1088, overlap 192×96 (multiples of 32) |
 | Output format | Structured JSON, semantic regions |
 | Fallback | Landscape grid tiling (~4 tiles) |
 | Verification | Step 0 empirical sanity check |
@@ -112,3 +97,4 @@ now covers all substantive decisions:
 | Anti-hallucination | Dual-model cross-check, temperature=0, `[illegible]` |
 | JSON reliability | format hints, repair, retries |
 | License | Both models Apache-2.0 |
+| NixOS config | `OLLAMA_MAX_LOADED_MODELS = "2"` |
