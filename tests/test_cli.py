@@ -1,5 +1,6 @@
 """Tests for the Typer CLI entry point."""
 
+import json
 import os
 import tempfile
 from unittest.mock import patch
@@ -7,6 +8,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from arena.__main__ import app
+from arena.orchestrator import PENDING_COMMENTS_FILE
 from arena.state import TASK_PLACEHOLDER, init_state, load_state, save_state
 
 runner = CliRunner()
@@ -259,7 +261,7 @@ class TestStatusCommand:
 
             result = runner.invoke(app, ["status", "--arena-dir", tmpdir])
             assert result.exit_code == 0
-            assert "Phase: solve" in result.output
+            assert "Phase: generate" in result.output
             assert "Round: 0" in result.output
             assert "Completed: False" in result.output
 
@@ -282,3 +284,174 @@ class TestStatusCommand:
             assert "Voting" in result.output
             assert "score=8" in result.output
             assert "Winner" in result.output
+
+
+class TestAddCommentCommand:
+    def _make_state_with_agents(self, tmpdir: str) -> None:
+        """Create a state with agent IDs so add-comment can proceed."""
+        state = init_state(task="test", repo="r")
+        for i, alias in enumerate(state.alias_mapping):
+            state.agent_ids[alias] = f"agent-{i}"
+        save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+    def test_no_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = runner.invoke(
+                app, ["add-comment", "--arena-dir", tmpdir, "-m", "hi"]
+            )
+            assert result.exit_code == 1
+            assert "No arena state found" in result.output
+
+    def test_no_agents_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = init_state(task="test", repo="r")
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+
+            result = runner.invoke(
+                app, ["add-comment", "--arena-dir", tmpdir, "-m", "hi"]
+            )
+            assert result.exit_code == 1
+            assert "No agents" in result.output
+
+    def test_queue_creates_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "Please focus on edge cases",
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "Queued" in result.output
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            assert os.path.exists(sidecar)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert len(data) == 1
+            assert data[0]["message"] == "Please focus on edge cases"
+            assert data[0]["wrapped"] is True
+            assert len(data[0]["targets"]) == 3
+
+    def test_queue_no_wrap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "raw message",
+                    "--queue",
+                    "--no-wrap",
+                ],
+            )
+            assert result.exit_code == 0
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert data[0]["wrapped"] is False
+
+    def test_queue_specific_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "msg",
+                    "--queue",
+                    "--targets",
+                    "agent_a",
+                ],
+            )
+            assert result.exit_code == 0
+
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert data[0]["targets"] == ["agent_a"]
+
+    def test_queue_invalid_target_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "msg",
+                    "--queue",
+                    "--targets",
+                    "nonexistent",
+                ],
+            )
+            assert result.exit_code == 1
+            assert "Unknown agent alias" in result.output
+
+    def test_queue_appends_to_existing_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            # Write an existing queued comment
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [{"message": "first", "wrapped": True, "targets": ["agent_a"]}], f
+                )
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "second",
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 0
+
+            with open(sidecar) as f:
+                data = json.load(f)
+            assert len(data) == 2
+            assert data[0]["message"] == "first"
+            assert data[1]["message"] == "second"
+
+    def test_immediate_and_queue_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_state_with_agents(tmpdir)
+
+            result = runner.invoke(
+                app,
+                [
+                    "add-comment",
+                    "--arena-dir",
+                    tmpdir,
+                    "-m",
+                    "msg",
+                    "--immediate",
+                    "--queue",
+                ],
+            )
+            assert result.exit_code == 1
+            assert "Cannot specify both" in result.output

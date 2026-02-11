@@ -23,12 +23,12 @@ code changes. The arena commit must:
 
 
 # ---------------------------------------------------------------------------
-# Solve phase (phase 1)
+# Generate phase (phase 1) — initial solve or revision
 # ---------------------------------------------------------------------------
 
-SOLVE_TEMPLATE = """\
+GENERATE_TEMPLATE = """\
 You are {alias}. {task}
-
+{critiques_block}
 After completing your work, commit your structured response as two files:
   {solution_path}
   {analysis_path}
@@ -39,25 +39,62 @@ After completing your work, commit your structured response as two files:
 
 {analysis_path} should contain:
   ## RISKS — Known risks, edge cases, trade-offs.
-  ## OPEN QUESTIONS — Uncertainties requiring verification.
+  ## OPEN QUESTIONS — Uncertainties requiring verification.{disagreements_block}
 {commit_block}"""
 
 
-def solve_prompt(
+def generate_prompt(
     task: str,
     alias: str,
     arena_number: int,
     round_num: int,
+    agent_critique_files: list[tuple[str, str, str]] | None = None,
 ) -> str:
-    """Generate the initial solve prompt."""
+    """Generate the prompt for the generate phase.
+
+    Round 0 (no critiques): produces the initial solve prompt.
+    Round > 0 (with critiques): produces the revision prompt with
+    branch references to all agents' critiques.
+    """
     solution_path = expected_path(arena_number, alias, "solution")
     analysis_path = expected_path(arena_number, alias, "analysis")
-    commit_desc = f"round {round_num:02d} solve {alias}"
-    return SOLVE_TEMPLATE.format(
+    commit_desc = f"round {round_num:02d} generate {alias}"
+
+    # Build critiques block (empty for round 0)
+    if agent_critique_files:
+        shuffled = list(agent_critique_files)
+        random.shuffle(shuffled)
+        ref_blocks = []
+        for crit_alias, branch, crit_path in shuffled:
+            label = crit_alias.replace("_", " ").upper()
+            ref_blocks.append(
+                f"=== CRITIQUE BY {label} ===\n"
+                f"  Branch: {branch}\n"
+                f"  Critique: git show origin/{branch}:{crit_path}"
+            )
+        critiques_block = (
+            "\nRead all agents' critiques by fetching them from their branches. "
+            "Use `git show` to read each file:\n\n"
+            + "\n\n".join(ref_blocks)
+            + "\n\nRead ALL critiques listed above before writing your revised solution.\n\n"
+            "Produce your REVISED solution, incorporating the strongest elements "
+            "from the feedback.\n"
+        )
+        disagreements_block = (
+            "\n  ## DISAGREEMENTS — Any remaining substantive disagreements\n"
+            '  with the other approaches, or "None."'
+        )
+    else:
+        critiques_block = ""
+        disagreements_block = ""
+
+    return GENERATE_TEMPLATE.format(
         alias=alias,
         task=task,
+        critiques_block=critiques_block,
         solution_path=solution_path,
         analysis_path=analysis_path,
+        disagreements_block=disagreements_block,
         commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
     )
 
@@ -152,75 +189,5 @@ def evaluate_prompt(
         references_block=references_block,
         critique_path=critique_path,
         verdict_path=verdict_path,
-        commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Revise phase (phase 3)
-# ---------------------------------------------------------------------------
-
-REVISE_TEMPLATE = """\
-You are {alias}. Read all agents' critiques by fetching them from their
-branches. Use `git show` to read each file:
-
-{references_block}
-
-Read ALL critiques listed above before writing your revised solution.
-
-Produce your REVISED solution, incorporating the strongest elements
-from the feedback.
-
-Commit your revised response as two files:
-  {solution_path}
-  {analysis_path}
-
-{solution_path} should contain:
-  ## PLAN and ## CHANGES as before.
-
-{analysis_path} should contain:
-  ## RISKS, ## OPEN QUESTIONS as before.
-  ## DISAGREEMENTS — Any remaining substantive disagreements
-  with the other approaches, or "None."
-{commit_block}"""
-
-
-def revise_prompt(
-    alias: str,
-    agent_critique_files: list[tuple[str, str, str]],
-    arena_number: int,
-    round_num: int,
-) -> str:
-    """Generate the revise prompt with branch file references.
-
-    Parameters
-    ----------
-    alias:
-        The alias of the agent receiving this prompt.
-    agent_critique_files:
-        List of (alias, branch, critique_path) tuples for all agents.
-    """
-    shuffled = list(agent_critique_files)
-    random.shuffle(shuffled)
-
-    ref_blocks = []
-    for crit_alias, branch, crit_path in shuffled:
-        label = crit_alias.replace("_", " ").upper()
-        ref_blocks.append(
-            f"=== CRITIQUE BY {label} ===\n"
-            f"  Branch: {branch}\n"
-            f"  Critique: git show origin/{branch}:{crit_path}"
-        )
-    references_block = "\n\n".join(ref_blocks)
-
-    solution_path = expected_path(arena_number, alias, "solution")
-    analysis_path = expected_path(arena_number, alias, "analysis")
-    commit_desc = f"round {round_num:02d} revise {alias}"
-
-    return REVISE_TEMPLATE.format(
-        alias=alias,
-        references_block=references_block,
-        solution_path=solution_path,
-        analysis_path=analysis_path,
         commit_block=_COMMIT_BLOCK.format(commit_desc=commit_desc),
     )

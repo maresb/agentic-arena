@@ -5,8 +5,8 @@ Pydantic models.  The orchestrator is stateless: it reads the state
 file, performs one step, writes the updated state, and can be killed
 and restarted at any point without losing progress.
 
-State machine:  Solve -> Evaluate -> Done  (if consensus)
-                                  -> Revise -> Evaluate -> ...
+State machine:  Generate -> Evaluate -> Done   (if consensus)
+                                     -> Generate -> Evaluate -> ...
 """
 
 from __future__ import annotations
@@ -34,8 +34,11 @@ ALIASES = ["agent_a", "agent_b", "agent_c"]
 # set to this value.
 TASK_PLACEHOLDER = "[DESCRIBE THE TASK HERE]"
 
-# Phase name → phase number, used in file naming.
-PHASE_NUMBERS: dict[str, int] = {"solve": 1, "evaluate": 2, "revise": 3}
+# Phase name → phase number, used in archive file naming.
+PHASE_NUMBERS: dict[str, int] = {"generate": 1, "evaluate": 2}
+
+# Legacy phase names mapped to their new equivalents.
+_LEGACY_PHASE_MAP: dict[str, str] = {"solve": "generate", "revise": "generate"}
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +49,12 @@ PHASE_NUMBERS: dict[str, int] = {"solve": 1, "evaluate": 2, "revise": 3}
 class Phase(StrEnum):
     """Arena phase in the consensus loop.
 
-    3-phase design: Solve -> Evaluate (critique + vote) -> Revise.
-    Evaluate and Verify are collapsed into a single Evaluate phase.
+    2-phase design: Generate -> Evaluate (critique + vote).
+    Each round is a clean generate-then-evaluate pair.
     """
 
-    SOLVE = "solve"
+    GENERATE = "generate"
     EVALUATE = "evaluate"
-    REVISE = "revise"
     DONE = "done"
 
 
@@ -115,7 +117,7 @@ class ArenaState(BaseModel):
 
     agent_ids: dict[str, str] = Field(default_factory=dict)
     round: int = 0
-    phase: Phase = Phase.SOLVE
+    phase: Phase = Phase.GENERATE
     phase_progress: dict[str, ProgressStatus] = Field(default_factory=dict)
     solutions: dict[str, str] = Field(default_factory=dict)
     analyses: dict[str, str] = Field(default_factory=dict)
@@ -283,6 +285,11 @@ def _yaml_instance() -> YAML:
 
 def _resolve_state_from_dict(data: dict, base_dir: str) -> ArenaState:
     """Build an ArenaState from a parsed dict and resolve file refs."""
+    # Map legacy phase names before validation
+    raw_phase = data.get("phase", "")
+    if isinstance(raw_phase, str) and raw_phase in _LEGACY_PHASE_MAP:
+        data["phase"] = _LEGACY_PHASE_MAP[raw_phase]
+
     state = ArenaState.model_validate(data)
 
     # Resolve dict fields (solutions, analyses, critiques)

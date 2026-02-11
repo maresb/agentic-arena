@@ -2,37 +2,44 @@
 
 from arena.prompts import (
     evaluate_prompt,
-    revise_prompt,
-    solve_prompt,
+    generate_prompt,
 )
 from arena.state import DEFAULT_MODEL_NICKNAMES
 
 
-class TestSolvePrompt:
+class TestGeneratePromptInitial:
+    """Tests for generate_prompt at round 0 (initial solve, no critiques)."""
+
     def test_contains_task(self) -> None:
-        prompt = solve_prompt("Refactor the auth module", "agent_a", 1, 0)
+        prompt = generate_prompt("Refactor the auth module", "agent_a", 1, 0)
         assert "Refactor the auth module" in prompt
 
     def test_contains_alias(self) -> None:
-        prompt = solve_prompt("task", "agent_b", 1, 0)
+        prompt = generate_prompt("task", "agent_b", 1, 0)
         assert "agent_b" in prompt
 
     def test_contains_file_paths(self) -> None:
-        prompt = solve_prompt("task", "agent_a", 3, 0)
+        prompt = generate_prompt("task", "agent_a", 3, 0)
         assert "arenas/0003/agent_a-solution.md" in prompt
         assert "arenas/0003/agent_a-analysis.md" in prompt
 
     def test_contains_section_headers(self) -> None:
-        prompt = solve_prompt("task", "agent_a", 1, 0)
+        prompt = generate_prompt("task", "agent_a", 1, 0)
         assert "## PLAN" in prompt
         assert "## CHANGES" in prompt
         assert "## RISKS" in prompt
         assert "## OPEN QUESTIONS" in prompt
 
     def test_contains_commit_convention(self) -> None:
-        prompt = solve_prompt("task", "agent_a", 1, 0)
+        prompt = generate_prompt("task", "agent_a", 1, 0)
         assert "[arena]" in prompt
         assert "LAST commit" in prompt
+
+    def test_no_critique_references(self) -> None:
+        """Round 0 should NOT reference any critiques."""
+        prompt = generate_prompt("task", "agent_a", 1, 0)
+        assert "CRITIQUE" not in prompt
+        assert "git show" not in prompt
 
 
 def _make_agent_files() -> list[tuple[str, str, str, str]]:
@@ -108,7 +115,7 @@ class TestEvaluatePrompt:
 
 
 def _make_critique_files() -> list[tuple[str, str, str]]:
-    """Build sample agent_critique_files for revise prompt tests."""
+    """Build sample agent_critique_files for revision prompt tests."""
     return [
         ("agent_a", "cursor/branch-a", "arenas/0001/agent_a-critique.md"),
         ("agent_b", "cursor/branch-b", "arenas/0001/agent_b-critique.md"),
@@ -116,9 +123,13 @@ def _make_critique_files() -> list[tuple[str, str, str]]:
     ]
 
 
-class TestRevisePrompt:
+class TestGeneratePromptRevision:
+    """Tests for generate_prompt at round > 0 (revision with critiques)."""
+
     def test_contains_all_critique_references(self) -> None:
-        prompt = revise_prompt("agent_a", _make_critique_files(), 1, 0)
+        prompt = generate_prompt(
+            "task", "agent_a", 1, 1, agent_critique_files=_make_critique_files()
+        )
         assert "AGENT A" in prompt
         assert "AGENT B" in prompt
         assert "AGENT C" in prompt
@@ -127,22 +138,29 @@ class TestRevisePrompt:
         assert "git show" in prompt
 
     def test_contains_file_paths(self) -> None:
-        prompt = revise_prompt(
+        prompt = generate_prompt(
+            "task",
             "agent_a",
-            [("agent_b", "cursor/b", "arenas/0003/agent_b-critique.md")],
             3,
             1,
+            agent_critique_files=[
+                ("agent_b", "cursor/b", "arenas/0003/agent_b-critique.md")
+            ],
         )
         assert "arenas/0003/agent_a-solution.md" in prompt
         assert "arenas/0003/agent_a-analysis.md" in prompt
 
     def test_contains_section_instructions(self) -> None:
-        prompt = revise_prompt("agent_a", _make_critique_files(), 1, 0)
+        prompt = generate_prompt(
+            "task", "agent_a", 1, 1, agent_critique_files=_make_critique_files()
+        )
         assert "## PLAN" in prompt
         assert "## DISAGREEMENTS" in prompt
 
     def test_contains_commit_convention(self) -> None:
-        prompt = revise_prompt("agent_a", _make_critique_files(), 1, 0)
+        prompt = generate_prompt(
+            "task", "agent_a", 1, 1, agent_critique_files=_make_critique_files()
+        )
         assert "[arena]" in prompt
         assert "LAST commit" in prompt
 

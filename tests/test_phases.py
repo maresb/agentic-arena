@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from arena.phases import (
     step_evaluate,
-    step_revise,
-    step_solve,
+    step_generate,
 )
 from arena.state import ArenaState, Phase, ProgressStatus, init_state
 
@@ -131,18 +130,19 @@ def _add_branch_names(state: ArenaState) -> None:
         state.branch_names[alias] = f"cursor/branch-{alias}"
 
 
-class TestStepSolve:
+class TestStepGenerateInitial:
+    """Tests for step_generate at round 0 (initial agent launch)."""
+
     @patch("arena.phases.fetch_file_from_branch")
     def test_launches_three_agents(self, mock_fetch: MagicMock) -> None:
         mock_fetch.side_effect = _branch_file_mock().side_effect
         state = init_state(task="test task", repo="owner/repo")
         api = make_mock_api()
 
-        # Make launch return different IDs
         ids = iter(["id-1", "id-2", "id-3"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_solve(state, api)
+        step_generate(state, api)
 
         assert api.launch.call_count == 3
         assert len(state.agent_ids) == 3
@@ -154,7 +154,6 @@ class TestStepSolve:
     @patch("arena.phases.fetch_file_from_branch", return_value=None)
     def test_skips_already_done_agents(self, _mock_fetch: MagicMock) -> None:
         state = init_state(task="test", repo="r")
-        # Mark one agent as done
         first_alias = list(state.alias_mapping.keys())[0]
         state.phase_progress[first_alias] = ProgressStatus.DONE
         state.agent_ids[first_alias] = "existing-id"
@@ -165,9 +164,8 @@ class TestStepSolve:
         ids = iter(["id-1", "id-2"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_solve(state, api)
+        step_generate(state, api)
 
-        # Should only launch 2 agents
         assert api.launch.call_count == 2
 
     @patch("arena.phases.fetch_file_from_branch", return_value=None)
@@ -177,7 +175,7 @@ class TestStepSolve:
         ids = iter(["id-1", "id-2", "id-3"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_solve(state, api)
+        step_generate(state, api)
 
         assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:
@@ -185,7 +183,7 @@ class TestStepSolve:
 
     @patch("arena.phases.fetch_file_from_branch", return_value=None)
     def test_captures_branch_names_from_status(self, _mock_fetch: MagicMock) -> None:
-        """After solve, branch names are extracted from status() responses."""
+        """After generate, branch names are extracted from status() responses."""
         state = init_state(task="test", repo="owner/repo")
         ids = iter(["id-1", "id-2", "id-3"])
         api = make_mock_api()
@@ -199,9 +197,8 @@ class TestStepSolve:
 
         api.status.side_effect = mock_status
 
-        step_solve(state, api)
+        step_generate(state, api)
 
-        # All agents should have branch names captured
         assert len(state.branch_names) == 3
         for alias in state.alias_mapping:
             assert alias in state.branch_names
@@ -232,12 +229,13 @@ class TestStepEvaluate:
         step_evaluate(state, api)
 
         assert api.followup.call_count == 3
-        for alias in state.alias_mapping:
-            assert alias in state.critiques
+        # No-consensus path transitions to GENERATE and clears transient
+        # state; verify the transition happened correctly instead.
+        assert state.phase == Phase.GENERATE
 
     @patch("arena.phases.fetch_file_from_branch")
-    def test_low_score_transitions_to_revise(self, mock_fetch: MagicMock) -> None:
-        """Score < 9 means no consensus -> transitions to REVISE."""
+    def test_low_score_transitions_to_generate(self, mock_fetch: MagicMock) -> None:
+        """Score < 9 means no consensus -> transitions to GENERATE."""
         mock_fetch.side_effect = _branch_file_mock(
             verdict_json=_make_vote_json(score=5)
         ).side_effect
@@ -246,7 +244,8 @@ class TestStepEvaluate:
 
         step_evaluate(state, api)
 
-        assert state.phase == Phase.REVISE
+        assert state.phase == Phase.GENERATE
+        assert state.round == 1  # round incremented
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
 
@@ -352,16 +351,17 @@ class TestStepEvaluate:
         step_evaluate(state, api)
 
         # Should still complete — all three agents done
-        assert state.phase in (Phase.REVISE, Phase.DONE)
-        for alias in state.alias_mapping:
-            assert alias in state.critiques
+        assert state.phase in (Phase.GENERATE, Phase.DONE)
 
 
-class TestStepRevise:
-    def _make_evaluated_state(self) -> ArenaState:
-        """Create a state that's ready for revise."""
+class TestStepGenerateRevision:
+    """Tests for step_generate at round > 0 (revision with critiques)."""
+
+    def _make_generate_revision_state(self) -> ArenaState:
+        """Create a state that's ready for generate at round > 0."""
         state = init_state(task="test", repo="r")
-        state.phase = Phase.REVISE
+        state.phase = Phase.GENERATE
+        state.round = 1  # revision round
         state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
         for i, alias in enumerate(state.alias_mapping):
             state.agent_ids[alias] = f"agent-{i}"
@@ -374,10 +374,10 @@ class TestStepRevise:
     @patch("arena.phases.fetch_file_from_branch")
     def test_sends_followups_and_updates_solutions(self, mock_fetch: MagicMock) -> None:
         mock_fetch.side_effect = _branch_file_mock().side_effect
-        state = self._make_evaluated_state()
+        state = self._make_generate_revision_state()
         api = make_mock_api()
 
-        step_revise(state, api)
+        step_generate(state, api)
 
         assert api.followup.call_count == 3
         assert state.phase == Phase.EVALUATE
@@ -385,35 +385,13 @@ class TestStepRevise:
             assert alias in state.solutions
 
     @patch("arena.phases.fetch_file_from_branch")
-    def test_transitions_to_evaluate_and_increments_round(
-        self, mock_fetch: MagicMock
-    ) -> None:
+    def test_transitions_to_evaluate(self, mock_fetch: MagicMock) -> None:
         mock_fetch.side_effect = _branch_file_mock().side_effect
-        state = self._make_evaluated_state()
-        assert state.round == 0
+        state = self._make_generate_revision_state()
         api = make_mock_api()
 
-        step_revise(state, api)
+        step_generate(state, api)
 
         assert state.phase == Phase.EVALUATE
-        assert state.round == 1
         for alias in state.alias_mapping:
             assert state.phase_progress[alias] == ProgressStatus.PENDING
-
-    @patch("arena.phases.fetch_file_from_branch")
-    def test_clears_transient_state(self, mock_fetch: MagicMock) -> None:
-        """On transition, per-round state is cleared."""
-        mock_fetch.side_effect = _branch_file_mock().side_effect
-        state = self._make_evaluated_state()
-        state.verify_votes = {"agent_a": ["agent_b"]}
-        state.verify_scores = {"agent_a": 5}
-        state.verify_divergences = {"agent_a": [{"topic": "x", "description": "y"}]}
-        api = make_mock_api()
-
-        step_revise(state, api)
-
-        assert state.critiques == {}
-        assert state.verify_votes == {}
-        assert state.verify_scores == {}
-        assert state.verify_divergences == {}
-        assert state.verify_winner is None

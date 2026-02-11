@@ -1,9 +1,8 @@
 """Main orchestrator loop and report generation.
 
-The orchestrator is a simple FSM: solve -> evaluate -> revise,
-looping back to evaluate until consensus or max rounds.  All progress
-lives in the state file, so the process can be killed and restarted at
-any point.
+The orchestrator is a simple FSM: generate -> evaluate, looping back
+to generate until consensus or max rounds.  All progress lives in the
+state file, so the process can be killed and restarted at any point.
 
 The core primitive is :func:`step_once`, which executes exactly one phase
 transition.  :func:`run_orchestrator` is a convenience wrapper that loops
@@ -18,7 +17,7 @@ import logging
 import os
 
 from arena.api import CursorCloudAPI
-from arena.phases import step_evaluate, step_revise, step_solve
+from arena.phases import step_evaluate, step_generate
 from arena.state import (
     PHASE_NUMBERS,
     ArenaState,
@@ -84,9 +83,8 @@ logger = logging.getLogger("arena")
 # ---------------------------------------------------------------------------
 
 PHASE_HANDLERS = {
-    Phase.SOLVE: step_solve,
+    Phase.GENERATE: step_generate,
     Phase.EVALUATE: step_evaluate,
-    Phase.REVISE: step_revise,
 }
 
 
@@ -132,32 +130,23 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
     Files already present on disk are not overwritten.
     """
     rnd = state.round
+    gen_num = PHASE_NUMBERS["generate"]
 
     for alias in state.alias_mapping:
         model = sanitize_filename_component(
             str(state.alias_mapping.get(alias, "unknown"))
         )
 
-        # Determine which solve/revise phase produced the current solutions
-        # (solve for round 0, revise for subsequent rounds)
-        sol_phase = "solve" if rnd == 0 and state.phase != Phase.EVALUATE else "revise"
-        if rnd == 0 and state.phase in (Phase.EVALUATE, Phase.REVISE, Phase.DONE):
-            # Round 0: solutions come from solve
-            sol_phase = "solve"
-        elif rnd > 0:
-            sol_phase = "revise"
-        sol_phase_num = PHASE_NUMBERS[sol_phase]
-
         solution = state.solutions.get(alias)
         if solution:
             uid = _content_uid(solution)
-            name = f"{rnd:02d}-{sol_phase_num}-{sol_phase}-{model}-solution-{uid}.md"
+            name = f"{rnd:02d}-{gen_num}-generate-{model}-solution-{uid}.md"
             _archive_artifact(arena_dir, name, solution)
 
         analysis = state.analyses.get(alias)
         if analysis:
             uid = _content_uid(analysis)
-            name = f"{rnd:02d}-{sol_phase_num}-{sol_phase}-{model}-analysis-{uid}.md"
+            name = f"{rnd:02d}-{gen_num}-generate-{model}-analysis-{uid}.md"
             _archive_artifact(arena_dir, name, analysis)
 
         critique = state.critiques.get(alias)
@@ -297,8 +286,7 @@ def update_report(state: ArenaState, arena_dir: str) -> None:
             model_san = sanitize_filename_component(
                 str(state.alias_mapping.get(alias, "unknown"))
             )
-            # Determine the generate phase name for this round
-            gen_phase = "solve" if rnd_idx == 0 else "revise"
+            gen_phase = "generate"
 
             link_parts: list[str] = []
 
@@ -475,6 +463,86 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     _write_winning_solution(state, arena_dir)
 
 
+PENDING_COMMENTS_FILE = "pending-comments.json"
+
+OPERATOR_WRAP_TEMPLATE = (
+    "The arena operator has provided additional context for your current task:\n\n"
+    "{message}"
+)
+
+
+def deliver_pending_comments(
+    state: ArenaState, arena_dir: str, api: CursorCloudAPI
+) -> int:
+    """Deliver any queued operator comments from the sidecar file.
+
+    Reads ``pending-comments.json`` from *arena_dir*, sends each message
+    to the target agents via ``api.followup()``, waits for responses, and
+    deletes the file after successful delivery.
+
+    Returns the number of comments delivered.
+    """
+    from arena.api import wait_for_followup  # avoid circular at module level
+
+    sidecar = os.path.join(arena_dir, PENDING_COMMENTS_FILE)
+    if not os.path.exists(sidecar):
+        return 0
+
+    with open(sidecar) as f:
+        try:
+            comments = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Malformed %s — skipping", PENDING_COMMENTS_FILE)
+            return 0
+
+    if not isinstance(comments, list) or not comments:
+        return 0
+
+    delivered = 0
+    state_path = os.path.join(arena_dir, "state.yaml")
+
+    for entry in comments:
+        message: str = entry.get("message", "")
+        if not message:
+            continue
+        wrapped: bool = entry.get("wrapped", True)
+        targets: list[str] = entry.get("targets", list(state.alias_mapping))
+
+        if wrapped:
+            message = OPERATOR_WRAP_TEMPLATE.format(message=message)
+
+        for alias in targets:
+            agent_id = state.agent_ids.get(alias)
+            if not agent_id:
+                logger.warning("Cannot deliver comment to %s — no agent_id", alias)
+                continue
+            prev_count = len(api.get_conversation(agent_id))
+            logger.info("Delivering operator comment to %s", alias)
+            api.followup(agent_id=agent_id, prompt=message)
+            wait_for_followup(api, agent_id, prev_count)
+
+            # Save conversation after delivery
+            conversation = api.get_conversation(agent_id)
+            from arena.phases import _save_conversation, _update_token_usage
+
+            _update_token_usage(state, alias, conversation)
+            _save_conversation(state, state_path, alias, conversation)
+
+        delivered += 1
+
+    # Remove sidecar after all comments are delivered
+    try:
+        os.remove(sidecar)
+    except OSError:
+        pass
+
+    if delivered:
+        logger.info("Delivered %d queued operator comment(s)", delivered)
+        save_state(state, state_path)
+
+    return delivered
+
+
 def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
     """Execute exactly one phase transition and return the updated state."""
     state_path = os.path.join(arena_dir, "state.yaml")
@@ -493,6 +561,10 @@ def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
         raise ValueError(f"Unknown or terminal phase: {before_phase}")
 
     api = _make_api()
+
+    # Deliver any queued operator comments before the phase runs
+    deliver_pending_comments(state, arena_dir, api)
+
     logger.info("=== Round %d | Phase: %s ===", state.round, before_phase)
     handler(state, api, state_path=state_path)
 

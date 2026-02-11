@@ -1,6 +1,9 @@
 """Phase implementations for the arena consensus loop.
 
-3-phase design: Solve -> Evaluate (critique + vote) -> Revise.
+2-phase design: Generate -> Evaluate (critique + vote).
+Each round is a clean generate-then-evaluate pair.  Round 0 launches
+agents; subsequent rounds send follow-ups with critique references.
+
 Each phase function mutates the :class:`ArenaState` in place and
 persists it after every meaningful step.  The orchestrator can be
 killed and restarted at any point — previously completed work is
@@ -30,8 +33,7 @@ from arena.extraction import (
 from arena.git import fetch_file_from_branch
 from arena.prompts import (
     evaluate_prompt,
-    revise_prompt,
-    solve_prompt,
+    generate_prompt,
 )
 from arena.state import (
     ArenaState,
@@ -205,74 +207,134 @@ def _fetch_with_retry(
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Solve (parallel)
+# Phase 1: Generate (parallel — initial solve or revision)
 # ---------------------------------------------------------------------------
 
 
-def step_solve(
+def step_generate(
     state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
 ) -> None:
-    """Launch agents to solve the task independently in parallel."""
+    """Generate solutions — launch agents (round 0) or revise (round > 0).
+
+    Round 0: launch brand-new agents with the task prompt.
+    Round > 0: send follow-up with critique references so agents revise.
+    Both paths produce solution + analysis files.
+    """
     _save = _saver(state, state_path)
     anum = state.config.arena_number
     rnd = state.round
+    is_initial = rnd == 0
 
-    # Launch agents that haven't started yet
-    for alias, model in state.alias_mapping.items():
+    # Build critique references for revision rounds
+    agent_critique_files: list[tuple[str, str, str]] | None = None
+    if not is_initial:
+        agent_critique_files = []
+        for a in state.alias_mapping:
+            branch = state.branch_names.get(a, "")
+            crit_path = expected_path(anum, a, "critique")
+            agent_critique_files.append((a, branch, crit_path))
+
+    if is_initial:
+        # ── Round 0: Launch agents ──
+        for alias, model in state.alias_mapping.items():
+            if state.phase_progress.get(alias) == ProgressStatus.DONE:
+                continue
+            if alias not in state.agent_ids:
+                logger.info("Launching %s", agent_label(alias, state))
+                _record_timing_start(state, alias, "generate")
+                agent = api.launch(
+                    prompt=generate_prompt(state.config.task, alias, anum, rnd),
+                    repo=state.config.repo,
+                    ref=state.config.base_branch,
+                    model=resolve_model(state, model),
+                )
+                state.agent_ids[alias] = agent["id"]
+                launch_branch = agent.get("branchName") or agent.get("branch_name")
+                if launch_branch:
+                    state.branch_names[alias] = launch_branch
+                _save()
+
+        # Poll all pending agents until finished (truly parallel)
+        pending = {
+            alias: state.agent_ids[alias]
+            for alias in state.alias_mapping
+            if state.phase_progress.get(alias) != ProgressStatus.DONE
+        }
+        if pending:
+            wait_for_all_agents(api, pending)
+
+        # Capture branch names from the status() response
+        for alias in state.alias_mapping:
+            if alias in state.branch_names:
+                continue
+            agent_id = state.agent_ids.get(alias)
+            if not agent_id:
+                continue
+            try:
+                info = api.status(agent_id)
+                branch = info.get("target", {}).get("branchName") or info.get(
+                    "target", {}
+                ).get("branch_name")
+                if branch:
+                    state.branch_names[alias] = branch
+                    logger.info("%s branch: %s", agent_label(alias, state), branch)
+            except Exception:
+                logger.warning(
+                    "Failed to fetch branch name for %s", agent_label(alias, state)
+                )
+        _save()
+    else:
+        # ── Round > 0: Send follow-ups with critique references ──
+        for alias in state.alias_mapping:
+            if state.phase_progress.get(alias) == ProgressStatus.DONE:
+                continue
+
+            if state.phase_progress.get(alias) == ProgressStatus.SENT:
+                current_count = len(api.get_conversation(state.agent_ids[alias]))
+                saved_count = state.sent_msg_counts.get(alias, 0)
+                if current_count > saved_count:
+                    continue
+                logger.info(
+                    "Re-sending generate follow-up to %s (crash recovery)",
+                    agent_label(alias, state),
+                )
+            else:
+                state.sent_msg_counts[alias] = len(
+                    api.get_conversation(state.agent_ids[alias])
+                )
+                state.phase_progress[alias] = ProgressStatus.SENT
+                _record_timing_start(state, alias, "generate")
+                _save()
+                logger.info(
+                    "Sending generate follow-up to %s", agent_label(alias, state)
+                )
+
+            api.followup(
+                agent_id=state.agent_ids[alias],
+                prompt=generate_prompt(
+                    state.config.task,
+                    alias,
+                    anum,
+                    rnd,
+                    agent_critique_files=agent_critique_files,
+                ),
+            )
+
+        # Wait for all SENT agents
+        pending_followups = {
+            alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
+            for alias in state.alias_mapping
+            if state.phase_progress.get(alias) == ProgressStatus.SENT
+        }
+        if pending_followups:
+            wait_for_all_followups(api, pending_followups)
+
+    # ── Extract solutions from committed branch files ──
+    for alias in state.alias_mapping:
         if state.phase_progress.get(alias) == ProgressStatus.DONE:
             continue
-        if alias not in state.agent_ids:
-            logger.info("Launching %s", agent_label(alias, state))
-            _record_timing_start(state, alias, "solve")
-            agent = api.launch(
-                prompt=solve_prompt(state.config.task, alias, anum, rnd),
-                repo=state.config.repo,
-                ref=state.config.base_branch,
-                model=resolve_model(state, model),
-            )
-            state.agent_ids[alias] = agent["id"]
-            # Capture branch name if returned by the API
-            branch = agent.get("branchName") or agent.get("branch_name")
-            if branch:
-                state.branch_names[alias] = branch
-            _save()
 
-    # Poll all pending agents until finished (truly parallel)
-    pending = {
-        alias: state.agent_ids[alias]
-        for alias in state.alias_mapping
-        if state.phase_progress.get(alias) != ProgressStatus.DONE
-    }
-    if pending:
-        wait_for_all_agents(api, pending)
-
-    # Capture branch names from the status() response
-    for alias in state.alias_mapping:
-        if alias in state.branch_names:
-            continue
-        agent_id = state.agent_ids.get(alias)
-        if not agent_id:
-            continue
-        try:
-            info = api.status(agent_id)
-            branch = info.get("target", {}).get("branchName") or info.get(
-                "target", {}
-            ).get("branch_name")
-            if branch:
-                state.branch_names[alias] = branch
-                logger.info("%s branch: %s", agent_label(alias, state), branch)
-        except Exception:
-            logger.warning(
-                "Failed to fetch branch name for %s", agent_label(alias, state)
-            )
-    _save()
-
-    # Extract content from committed branch files
-    for alias in state.alias_mapping:
-        if state.phase_progress.get(alias) == ProgressStatus.DONE:
-            continue
-
-        commit_desc = f"round {rnd:02d} solve {alias}"
+        commit_desc = f"round {rnd:02d} generate {alias}"
         sol_path = expected_path(anum, alias, "solution")
         ana_path = expected_path(anum, alias, "analysis")
 
@@ -295,7 +357,7 @@ def step_solve(
         state.solutions[alias] = solution or ""
         state.analyses[alias] = analysis or ""
         state.phase_progress[alias] = ProgressStatus.DONE
-        _record_timing_end(state, alias, "solve")
+        _record_timing_end(state, alias, "generate")
         _capture_agent_metadata(state, alias, api)
         _save()
 
@@ -515,112 +577,16 @@ def step_evaluate(
         state.final_verdict = verdict_summary
     else:
         state.final_verdict = verdict_summary
-        state.phase = Phase.REVISE
+        state.round += 1
+        state.phase = Phase.GENERATE
         state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
+        # Clear per-round transient state for the next generate phase
+        state.critiques = {}
+        state.verify_votes = {}
+        state.verify_scores = {}
+        state.verify_divergences = {}
+        state.verify_winner = None
+        state.verify_results = []
 
     state.sent_msg_counts = {}
-    _save()
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: Revise (parallel)
-# ---------------------------------------------------------------------------
-
-
-def step_revise(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
-) -> None:
-    """Each agent revises its solution based on all critiques."""
-    _save = _saver(state, state_path)
-    anum = state.config.arena_number
-    rnd = state.round
-
-    # Build branch file references for critiques (stable paths)
-    agent_critique_files: list[tuple[str, str, str]] = []
-    for a in state.alias_mapping:
-        branch = state.branch_names.get(a, "")
-        crit_path = expected_path(anum, a, "critique")
-        agent_critique_files.append((a, branch, crit_path))
-
-    # Send follow-ups
-    for alias in state.alias_mapping:
-        if state.phase_progress.get(alias) == ProgressStatus.DONE:
-            continue
-
-        if state.phase_progress.get(alias) == ProgressStatus.SENT:
-            current_count = len(api.get_conversation(state.agent_ids[alias]))
-            saved_count = state.sent_msg_counts.get(alias, 0)
-            if current_count > saved_count:
-                continue
-            logger.info(
-                "Re-sending revise follow-up to %s (crash recovery)",
-                agent_label(alias, state),
-            )
-        else:
-            state.sent_msg_counts[alias] = len(
-                api.get_conversation(state.agent_ids[alias])
-            )
-            state.phase_progress[alias] = ProgressStatus.SENT
-            _record_timing_start(state, alias, "revise")
-            _save()
-            logger.info("Sending revise follow-up to %s", agent_label(alias, state))
-
-        api.followup(
-            agent_id=state.agent_ids[alias],
-            prompt=revise_prompt(alias, agent_critique_files, anum, rnd),
-        )
-
-    # Wait for all SENT agents
-    pending = {
-        alias: (state.agent_ids[alias], state.sent_msg_counts.get(alias, 0))
-        for alias in state.alias_mapping
-        if state.phase_progress.get(alias) == ProgressStatus.SENT
-    }
-    if pending:
-        wait_for_all_followups(api, pending)
-
-    # Extract revised solutions
-    for alias in state.alias_mapping:
-        if state.phase_progress.get(alias) == ProgressStatus.DONE:
-            continue
-
-        commit_desc = f"round {rnd:02d} revise {alias}"
-        sol_path = expected_path(anum, alias, "solution")
-        ana_path = expected_path(anum, alias, "analysis")
-
-        solution = _fetch_with_retry(
-            state, alias, sol_path, api, commit_desc=commit_desc
-        )
-        analysis = _fetch_agent_file(state, alias, ana_path)
-
-        conversation = api.get_conversation(state.agent_ids[alias])
-        _update_token_usage(state, alias, conversation)
-        _save_conversation(state, state_path, alias, conversation)
-
-        if solution is None:
-            logger.error(
-                "No revised solution from %s; agent did not commit %s",
-                agent_label(alias, state),
-                sol_path,
-            )
-
-        state.solutions[alias] = solution or ""
-        state.analyses[alias] = analysis or ""
-        state.phase_progress[alias] = ProgressStatus.DONE
-        _record_timing_end(state, alias, "revise")
-        _capture_agent_metadata(state, alias, api)
-        _save()
-
-    # Transition to next evaluate round
-    state.round += 1
-    state.phase = Phase.EVALUATE
-    state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
-    state.sent_msg_counts = {}
-    # Clear per-round transient state
-    state.critiques = {}
-    state.verify_votes = {}
-    state.verify_scores = {}
-    state.verify_divergences = {}
-    state.verify_winner = None
-    state.verify_results = []
     _save()

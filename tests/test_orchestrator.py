@@ -6,15 +6,17 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 from arena.orchestrator import (
+    PENDING_COMMENTS_FILE,
     _archive_round,
     _write_winning_solution,
+    deliver_pending_comments,
     generate_final_report,
     latest_arena_dir,
     next_arena_dir,
     step_once,
     update_report,
 )
-from arena.state import Phase, init_state, save_state
+from arena.state import ArenaState, Phase, init_state, save_state
 
 
 class TestUpdateReport:
@@ -233,7 +235,7 @@ class TestArchiveRound:
             assert len(analysis_files) == 3
             # Verify new naming: {round}-{phase_num}-{phase}-{model}-{type}-{uid}.md
             for f in solution_files:
-                assert f.startswith("00-1-solve-")
+                assert f.startswith("00-1-generate-")
                 assert "-solution-" in f
                 assert f.endswith(".md")
 
@@ -289,7 +291,7 @@ class TestArchiveRound:
         with tempfile.TemporaryDirectory() as tmpdir:
             _archive_round(state, tmpdir)
             _archive_round(state, tmpdir)
-            files = [f for f in os.listdir(tmpdir) if "solve" in f]
+            files = [f for f in os.listdir(tmpdir) if "generate" in f]
             assert len(files) == 1
 
 
@@ -312,8 +314,8 @@ class TestStepOnce:
             with pytest.raises(RuntimeError, match="already completed"):
                 step_once(arena_dir=tmpdir)
 
-    def test_dispatches_solve_phase(self) -> None:
-        """step_once should invoke the solve handler and save state."""
+    def test_dispatches_generate_phase(self) -> None:
+        """step_once should invoke the generate handler and save state."""
         with tempfile.TemporaryDirectory() as tmpdir:
             state = init_state(task="test", repo="owner/repo")
             save_state(state, os.path.join(tmpdir, "state.yaml"))
@@ -421,3 +423,183 @@ class TestArenaDirectoryNumbering:
             os.makedirs(os.path.join(root, "0003"))
             os.makedirs(os.path.join(root, "0002"))
             assert latest_arena_dir(root) == os.path.join(root, "0003")
+
+
+class TestDeliverPendingComments:
+    """Tests for the sidecar comment pickup logic."""
+
+    def _make_state_with_agents(self) -> ArenaState:
+        """Return a state with agent IDs set."""
+        state = init_state(task="test", repo="r")
+        for i, alias in enumerate(state.alias_mapping):
+            state.agent_ids[alias] = f"agent-{i}"
+            state.branch_names[alias] = f"cursor/branch-{alias}"
+        return state
+
+    def _make_api(self) -> MagicMock:
+        """Build a minimal mock API for comment delivery."""
+        api = MagicMock()
+        followup_counts: dict[str, int] = {}
+
+        def mock_followup(agent_id: str, prompt: str) -> dict:
+            followup_counts[agent_id] = followup_counts.get(agent_id, 0) + 1
+            return {"id": agent_id}
+
+        def mock_get_conversation(agent_id: str) -> list[dict]:
+            n = followup_counts.get(agent_id, 0)
+            msgs: list[dict] = [{"role": "assistant", "content": "initial"}]
+            for _ in range(n):
+                msgs.append({"role": "user", "content": "follow-up"})
+                msgs.append({"role": "assistant", "content": "response"})
+            return msgs
+
+        api.followup.side_effect = mock_followup
+        api.get_conversation.side_effect = mock_get_conversation
+        api.status.return_value = {"status": "FINISHED"}
+        return api
+
+    def test_no_sidecar_returns_zero(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert deliver_pending_comments(state, tmpdir, api) == 0
+            assert api.followup.call_count == 0
+
+    def test_delivers_and_deletes_sidecar(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "message": "Focus on tests",
+                            "wrapped": True,
+                            "targets": list(state.alias_mapping.keys()),
+                        }
+                    ],
+                    f,
+                )
+
+            delivered = deliver_pending_comments(state, tmpdir, api)
+            assert delivered == 1
+            assert api.followup.call_count == 3
+            assert not os.path.exists(sidecar)
+
+    def test_wraps_message(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        aliases = list(state.alias_mapping.keys())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "message": "GPU has 48GB",
+                            "wrapped": True,
+                            "targets": [aliases[0]],
+                        }
+                    ],
+                    f,
+                )
+
+            deliver_pending_comments(state, tmpdir, api)
+            call_args = api.followup.call_args
+            sent_prompt = call_args.kwargs.get("prompt", call_args[1].get("prompt", ""))
+            assert "arena operator" in sent_prompt.lower()
+            assert "GPU has 48GB" in sent_prompt
+
+    def test_raw_message_not_wrapped(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        aliases = list(state.alias_mapping.keys())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "message": "raw message here",
+                            "wrapped": False,
+                            "targets": [aliases[0]],
+                        }
+                    ],
+                    f,
+                )
+
+            deliver_pending_comments(state, tmpdir, api)
+            call_args = api.followup.call_args
+            sent_prompt = call_args.kwargs.get("prompt", call_args[1].get("prompt", ""))
+            assert sent_prompt == "raw message here"
+
+    def test_targets_specific_agents(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        aliases = list(state.alias_mapping.keys())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "message": "only for a",
+                            "wrapped": False,
+                            "targets": [aliases[0]],
+                        }
+                    ],
+                    f,
+                )
+
+            deliver_pending_comments(state, tmpdir, api)
+            assert api.followup.call_count == 1
+
+    def test_multiple_comments_delivered(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+        aliases = list(state.alias_mapping.keys())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            save_state(state, os.path.join(tmpdir, "state.yaml"))
+            with open(sidecar, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "message": "first",
+                            "wrapped": False,
+                            "targets": [aliases[0]],
+                        },
+                        {
+                            "message": "second",
+                            "wrapped": False,
+                            "targets": [aliases[0]],
+                        },
+                    ],
+                    f,
+                )
+
+            delivered = deliver_pending_comments(state, tmpdir, api)
+            assert delivered == 2
+            assert api.followup.call_count == 2
+
+    def test_malformed_sidecar_skipped(self) -> None:
+        state = self._make_state_with_agents()
+        api = self._make_api()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sidecar = os.path.join(tmpdir, PENDING_COMMENTS_FILE)
+            with open(sidecar, "w") as f:
+                f.write("not valid json{{{")
+
+            delivered = deliver_pending_comments(state, tmpdir, api)
+            assert delivered == 0
+            assert api.followup.call_count == 0

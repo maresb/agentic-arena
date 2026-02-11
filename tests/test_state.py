@@ -48,16 +48,17 @@ class TestTaskPlaceholder:
 
 
 class TestPhaseEnum:
-    def test_three_phases_plus_done(self) -> None:
-        assert Phase.SOLVE == "solve"
+    def test_two_phases_plus_done(self) -> None:
+        assert Phase.GENERATE == "generate"
         assert Phase.EVALUATE == "evaluate"
-        assert Phase.REVISE == "revise"
         assert Phase.DONE == "done"
-        # VERIFY should NOT exist
+        # Legacy phases should NOT exist
+        assert not hasattr(Phase, "SOLVE")
+        assert not hasattr(Phase, "REVISE")
         assert not hasattr(Phase, "VERIFY")
 
     def test_phase_numbers(self) -> None:
-        assert PHASE_NUMBERS == {"solve": 1, "evaluate": 2, "revise": 3}
+        assert PHASE_NUMBERS == {"generate": 1, "evaluate": 2}
 
 
 class TestInitState:
@@ -67,7 +68,7 @@ class TestInitState:
         assert state.config.repo == "owner/repo"
         assert state.config.base_branch == "main"
         assert state.config.max_rounds == 3
-        assert state.phase == Phase.SOLVE
+        assert state.phase == Phase.GENERATE
         assert state.round == 0
         assert state.completed is False
         assert state.consensus_reached is None

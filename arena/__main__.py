@@ -1,17 +1,20 @@
 """CLI entry point for the Agentic Arena.
 
 Usage:
-    python -m arena init   [--task "..."] [--repo owner/repo] [options]
-    python -m arena run    [--arena-dir arena]
-    python -m arena step   [--arena-dir arena]
-    python -m arena status [--arena-dir arena]
+    python -m arena init        [--task "..."] [--repo owner/repo] [options]
+    python -m arena run         [--arena-dir arena]
+    python -m arena step        [--arena-dir arena]
+    python -m arena status      [--arena-dir arena]
+    python -m arena add-comment [--arena-dir arena]
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Annotated
 
 import typer
@@ -21,13 +24,20 @@ load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 
 from arena.git import default_repo_from_remote  # noqa: E402
 from arena.orchestrator import (  # noqa: E402
+    PENDING_COMMENTS_FILE,
     arena_number_from_dir,
     latest_arena_dir,
     next_arena_dir,
     run_orchestrator,
     step_once,
 )
-from arena.state import TASK_PLACEHOLDER, init_state, load_state, save_state  # noqa: E402
+from arena.state import (  # noqa: E402
+    TASK_PLACEHOLDER,
+    ProgressStatus,
+    init_state,
+    load_state,
+    save_state,
+)
 
 app = typer.Typer(
     name="arena",
@@ -86,7 +96,9 @@ def init(
         ),
     ] = None,
     base_branch: Annotated[str, typer.Option(help="Base branch to work from")] = "main",
-    max_rounds: Annotated[int, typer.Option(help="Maximum evaluate-revise rounds")] = 3,
+    max_rounds: Annotated[
+        int, typer.Option(help="Maximum generate-evaluate rounds")
+    ] = 3,
     verify_commands: Annotated[
         str | None,
         typer.Option(help="Comma-separated commands to run during verify"),
@@ -306,6 +318,233 @@ def status(
 
     if state.consensus_reached is not None:
         typer.echo(f"Consensus: {state.consensus_reached}")
+
+
+@app.command(name="add-comment")
+def add_comment(
+    arena_dir: Annotated[
+        str | None, typer.Option(help="Directory for arena state and outputs")
+    ] = None,
+    message: Annotated[
+        str | None,
+        typer.Option("--message", "-m", help="Comment text (skips interactive prompt)"),
+    ] = None,
+    immediate: Annotated[
+        bool,
+        typer.Option(
+            "--immediate", help="Deliver immediately (only when agents are idle)"
+        ),
+    ] = False,
+    queue: Annotated[
+        bool,
+        typer.Option("--queue", help="Queue for delivery at next phase start"),
+    ] = False,
+    no_wrap: Annotated[
+        bool,
+        typer.Option(
+            "--no-wrap",
+            help="Send message as-is without operator context framing",
+        ),
+    ] = False,
+    targets: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated agent aliases to target (default: all agents)"
+        ),
+    ] = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Enable verbose (DEBUG) logging")
+    ] = False,
+) -> None:
+    """Inject a message into agent conversations.
+
+    Sends an operator comment to one or more agents. When agents are idle
+    the comment can be delivered immediately; otherwise it is queued in a
+    sidecar file and delivered at the start of the next phase.
+
+    Interactive mode (no flags) walks through delivery mode, message text,
+    framing, and target selection step by step.
+    """
+    arena_dir = _resolve_arena_dir(arena_dir)
+    state_path = os.path.join(arena_dir, "state.yaml")
+    state = load_state(state_path)
+    if state is None:
+        typer.echo(f"No arena state found at {state_path}")
+        raise typer.Exit(code=1)
+
+    if not state.agent_ids:
+        typer.echo("No agents have been launched yet. Run at least one step first.")
+        raise typer.Exit(code=1)
+
+    # Interactive mode is when --message is not provided (user types interactively)
+    _is_interactive = message is None
+
+    # ── Detect whether a step is in progress ──
+    step_in_progress = any(
+        v == ProgressStatus.SENT for v in state.phase_progress.values()
+    )
+
+    # ── Resolve target aliases ──
+    if targets is not None:
+        target_list = [t.strip() for t in targets.split(",") if t.strip()]
+        for t in target_list:
+            if t not in state.alias_mapping:
+                typer.echo(f"Unknown agent alias: {t}")
+                typer.echo(f"Valid aliases: {', '.join(state.alias_mapping)}")
+                raise typer.Exit(code=1)
+    else:
+        # Interactive or default: all agents
+        if message is None:
+            # Interactive target selection
+            aliases = list(state.alias_mapping.keys())
+            typer.echo("\nAvailable agents:")
+            for i, alias in enumerate(aliases, 1):
+                model = state.alias_mapping.get(alias, "unknown")
+                typer.echo(f"  {i}. {alias} ({model})")
+            typer.echo("  0. All agents")
+
+            choice = typer.prompt(
+                "Target agents (0 for all, or comma-separated numbers)",
+                default="0",
+            )
+            if choice.strip() == "0":
+                target_list = aliases
+            else:
+                indices = [int(x.strip()) for x in choice.split(",") if x.strip()]
+                target_list = []
+                for idx in indices:
+                    if 1 <= idx <= len(aliases):
+                        target_list.append(aliases[idx - 1])
+                    else:
+                        typer.echo(f"Invalid selection: {idx}")
+                        raise typer.Exit(code=1)
+        else:
+            target_list = list(state.alias_mapping.keys())
+
+    # ── Resolve delivery mode ──
+    if immediate and queue:
+        typer.echo("Cannot specify both --immediate and --queue")
+        raise typer.Exit(code=1)
+
+    if not immediate and not queue:
+        # Interactive mode
+        if step_in_progress:
+            typer.echo(
+                "\nA step is currently in progress — only queued delivery is available."
+            )
+            delivery = "queue"
+        else:
+            import click
+
+            delivery = typer.prompt(
+                "\nDelivery mode",
+                type=click.Choice(["immediate", "queue"]),
+                default="immediate",
+            )
+    elif immediate:
+        if step_in_progress:
+            typer.echo(
+                "Cannot deliver immediately — a step is in progress. "
+                "Use --queue instead."
+            )
+            raise typer.Exit(code=1)
+        delivery = "immediate"
+    else:
+        delivery = "queue"
+
+    # ── Get message text ──
+    if message is None:
+        typer.echo("\nEnter your message (end with an empty line):")
+        lines: list[str] = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
+            if line == "":
+                break
+            lines.append(line)
+        message = "\n".join(lines)
+        if not message.strip():
+            typer.echo("Empty message — aborting.")
+            raise typer.Exit(code=1)
+
+    # ── Resolve wrapping ──
+    # In non-interactive mode (--message flag), default to wrapping unless
+    # --no-wrap is set.  In interactive mode, ask.
+    if no_wrap:
+        wrap = False
+    elif _is_interactive:
+        wrap = typer.confirm(
+            "\nWrap message with operator context framing?", default=True
+        )
+    else:
+        wrap = True
+
+    # ── Execute ──
+    target_display = ", ".join(target_list)
+
+    if delivery == "immediate":
+        _setup_logging(arena_dir, verbose=verbose)
+        from arena.orchestrator import _make_api  # noqa: E402
+
+        api = _make_api()
+
+        from arena.api import wait_for_followup  # noqa: E402
+        from arena.orchestrator import OPERATOR_WRAP_TEMPLATE  # noqa: E402
+        from arena.phases import (  # noqa: E402
+            _save_conversation,
+            _update_token_usage,
+        )
+
+        final_message = (
+            OPERATOR_WRAP_TEMPLATE.format(message=message) if wrap else message
+        )
+
+        for alias in target_list:
+            agent_id = state.agent_ids.get(alias)
+            if not agent_id:
+                typer.echo(f"  Skipping {alias} — no agent_id")
+                continue
+            typer.echo(f"  Sending to {alias}...")
+            prev_count = len(api.get_conversation(agent_id))
+            api.followup(agent_id=agent_id, prompt=final_message)
+            wait_for_followup(api, agent_id, prev_count)
+
+            conversation = api.get_conversation(agent_id)
+            _update_token_usage(state, alias, conversation)
+            _save_conversation(state, state_path, alias, conversation)
+
+        save_state(state, state_path)
+        typer.echo(f"\nDelivered immediately to: {target_display}")
+    else:
+        # Queue to sidecar file
+        sidecar_path = os.path.join(arena_dir, PENDING_COMMENTS_FILE)
+        existing: list[dict] = []
+        if os.path.exists(sidecar_path):
+            try:
+                with open(sidecar_path) as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                existing = []
+
+        existing.append(
+            {
+                "message": message,
+                "wrapped": wrap,
+                "targets": target_list,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        with open(sidecar_path, "w") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+
+        typer.echo(
+            f"\nQueued comment for: {target_display}\n"
+            f"Will be delivered at the start of the next phase.\n"
+            f"File: {sidecar_path}"
+        )
 
 
 if __name__ == "__main__":
