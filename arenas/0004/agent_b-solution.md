@@ -1,25 +1,34 @@
-## PLAN
-1. **Select Qwen2.5-VL-72B Instruct** for strongest open OCR/UI performance; keep a minimal fallback only if Qwen is unavailable.
-2. **Verify downscaling behavior first** (native 4K sanity check), then use **window-aware crops** to preserve text fidelity.
-3. **Use a two-pass workflow** (global low-res layout + high-res per-window extraction) with optional text-only synthesis.
-4. **Emit structured JSON** (no pixel-precise bboxes) with JSON reliability measures (format, repair, retry).
-5. **Optimize for classification** via delta hashing, session segmentation, and rich metadata (window title, app, mouse, idle time).
+## PLAN — Numbered key decisions with rationale.
+1. **Primary model: Qwen3-VL-32B Instruct** because it is the current (2026-02) successor line with improved GUI/OCR focus, long context, and Apache-2.0 licensing, while remaining practical on a single 96GB GPU.
+2. **Secondary model: GLM-OCR** to maximize faithful text extraction for code/terminal/PDF-heavy windows; this directly mitigates the “downscaled → hallucinated text” failure mode.
+3. **Resolution control first, tiling second:** explicitly control pixel budgets (min/max pixels or resized dims) and use window-aware crops; only tile when a crop still exceeds budget.
+4. **Structured, conservative outputs:** JSON-only responses, explicit “[illegible]” markers, and JSON repair/retry to reduce hallucination and parsing failures.
+5. **Classification-ready storage:** store text + metadata + deltas (no screenshots) to enable future labeling and RL without large image retention.
 
-## CHANGES
-- Added revised arena report files:
+## CHANGES — Unified diff or precise change descriptions.
+- Updated arena report files:
   - arenas/0004/agent_b-solution.md
   - arenas/0004/agent_b-analysis.md
 
-## REVISED REPORT
+## REPORT
 
-### 1) Model selection
-**Primary:** Qwen2.5-VL-72B Instruct  
-**Fallback (only if Qwen is unavailable):** InternVL2.5-78B
+### 1) Model selection (as of 2026-02-10)
+**Primary:** Qwen3-VL-32B Instruct (Ollama: `qwen3-vl:32b`)  
+**Secondary OCR specialist:** GLM-OCR (Ollama: `glm-ocr`)
 
-**Quantization guidance**
-- Start with **Q4_K_M** for safety and headroom.
-- Test **Q5_K_M** if OCR accuracy is insufficient.
-- **Q8_0** is only advisable for small crops; it can be tight for full 4K due to visual KV cache.
+**Why Qwen3-VL-32B**
+- Newer Qwen3-VL line (2025/2026) targets GUI understanding + OCR and supports long context (~256K).
+- Apache-2.0 license is simpler for consulting work.
+- 32B is fast and stable on 96GB VRAM while allowing larger visual token budgets.
+
+**Why GLM-OCR**
+- OCR-first multimodal model with layout + recognition architecture.
+- Ideal for dense text (terminal logs, IDEs, PDFs) where VLMs tend to hallucinate.
+- Small, fast, Apache-2.0; can run alongside Qwen3-VL.
+
+**When to use which**
+- Qwen3-VL: global layout, window/app identification, UI element understanding, images/graphs.
+- GLM-OCR: text-heavy windows where verbatim extraction matters.
 
 ### 2) NixOS setup (Ollama + CUDA)
 ```nix
@@ -35,54 +44,62 @@ services.ollama = {
 hardware.nvidia.modesetting.enable = true;
 ```
 
-### 3) Workflow
+### 3) Resolution controls (critical)
+Most runtimes enforce a pixel budget. You must set one of:
+- **min_pixels / max_pixels**, or
+- **explicit resized_width/resized_height**.
+
+For Qwen3-VL, resized dimensions should be **multiples of 32**. If you resize manually, disable any further resizing in the processor to avoid double-scaling.
+
+**Recommended budgets to test**
+- **B = 2.1 MP** (about 1920x1088) for speed and good UI text.
+- **B = 4.2 MP** (about 2048x2048) for very small text and dense code.
+
+### 4) Screenshot preparation and chunking
 
 #### Step 0 — Native 4K sanity check
 Send one full-resolution screenshot and ask for a few known tiny text strings.  
-If it reads them correctly, full-image processing may be viable.  
-If it fails (common with default pixel budgets), use the multi-pass workflow below.
+If it reads them correctly, full-image processing might be viable.  
+If not, follow the multi-pass workflow below.
 
-#### Phase 1 — Global layout (low-res, full screen)
-- Downscale so the short side is ~1024–1536.
-- Prompt for layout only (no detailed text).
-- Example prompt (JSON-only):
-  - "Describe the desktop layout as JSON. For each visible window, provide approximate
-    position (top-left/top-right/center/bottom-left/bottom-right/maximized) and app type.
-    Do not attempt to read small text."
+#### Phase 1 — Global layout pass (low-res)
+- Resize full frame to a modest budget (short side 1024–1536).
+- Prompt for layout only (windows, rough positions, app types).
 
-#### Phase 2 — High-res detail (window-aware crops; preferred)
-1. Use GNOME geometry (extension or `gdbus`) to get window bounds and z-order.
-2. Crop each visible window from the original full-res screenshot.
-3. Skip minimized or fully occluded windows; prioritize the active window and top N visible windows.
-4. If a **maximized window** still gets downscaled, **split it into two vertical tiles**
-   with 10–12% overlap.
+#### Phase 2 — Window-level detail (preferred)
+1. Obtain window rectangles (x, y, w, h) and z-order from GNOME.
+2. Crop each visible window at native resolution.
+3. Skip minimized or fully occluded windows; prioritize active window + top N.
+4. If a window crop **exceeds your pixel budget**, tile within that window.
 
-**Per-window prompt (JSON-only, anti-hallucination):**
-- "The active window title is '{title}'. Respond with JSON only. Extract:
-  - app
-  - text_lines (array of strings, verbatim)
-  - ui_elements (array of {type, label, region})
-  - summary (1–2 sentences)
-  Only describe what is clearly visible. Use '[illegible]' for unclear text."
+**Maximized window edge case**
+- If a maximized window is still too large, split into **two vertical tiles**
+  (left/right) with **10–12% overlap**.
 
-#### Phase 2 (fallback) — Grid tiling (if geometry is unavailable)
-- Use **landscape tiles** to match 16:9:
-  - **Tile size:** 1920x1080
-  - **Overlap:** 10–12%
-- Tile counts:
-  - 3840x2160 → 2x2 (4 tiles)
-  - 5120x2880 → 3x3 (9 tiles)
+#### Phase 2 (fallback) — Grid tiling (no geometry)
+Use landscape tiles that align with Qwen3-VL’s multiple-of-32 constraint:
+- **Tile size:** 1920x1088 (both divisible by 32)
+- **Overlap:** ~10% (rounded to multiples of 32)
 
-#### Phase 3 — Text-only synthesis (optional)
-If a single unified description is needed, merge the layout summary with per-window (or per-tile) JSON in a text-only pass. For early prototypes, store per-window JSON as-is.
+**Tile counts**
+- 3840x2160 → 2x2 (4 tiles)
+- 5120x2880 → 3x3 (9 tiles)
+- 7680x4320 → 4x4 (16 tiles)
 
-### 4) Structured output (robust schema, no pixel-precise bboxes)
+#### Merging per-tile outputs
+1. Normalize text (whitespace, punctuation).
+2. Deduplicate overlap using string similarity; keep the longer, cleaner line.
+3. Aggregate in reading order (top-to-bottom, left-to-right).
+4. Optionally run a text-only summarization pass for a compact description.
+
+### 5) Structured outputs (conservative)
+**Qwen3-VL output JSON**
 ```
 {
   "window": {
     "title": "VS Code — project",
     "app": "code",
-    "bbox": [x, y, width, height]   // from GNOME, not the model
+    "bbox": [x, y, width, height]
   },
   "text_lines": [
     {"line": "def process_frame(...):", "region": "center-left"},
@@ -98,25 +115,25 @@ If a single unified description is needed, merge the layout summary with per-win
 
 **JSON reliability**
 - Use Ollama `format: "json"` if available.
-- Validate/repair JSON on parse failure; retry once or twice.
+- Validate + repair JSON, retry up to 2 times.
 
-### 5) Merge and deduplication
-- **Window crops:** no merge needed beyond combining per-window outputs.
-- **Grid tiles:** dedupe by text similarity; keep the longest non-truncated line.
-- Avoid pixel IoU dedupe; VLM spatial accuracy is unreliable.
+**GLM-OCR output**
+- Store OCR text separately and use it to verify or replace low-confidence text blocks.
 
-### 6) Supplemental tools
-- **Capture:** `gnome-screenshot` or GNOME Shell screenshot D-Bus API (Wayland-safe).
-- **Geometry:** GNOME extension or `gdbus` to `global.get_window_actors()`.
+### 6) Supplementary tools/workflows
+- **Capture:** `gnome-screenshot` or GNOME D-Bus screenshot portal (Wayland-safe).
+- **Geometry:** GNOME extension or `gdbus` into Mutter (`global.get_window_actors()`).
 - **Image processing:** `pyvips` (preferred) or OpenCV.
-- **Optional OCR cross-check:** Tesseract or RapidOCR for critical text.
+- **Storage:** SQLite + FTS or JSONL with metadata (active window title, mouse, idle time).
+- **Delta hashing:** pHash to skip unchanged frames.
 
-### 7) Classification-ready storage
-- Use **delta hashing** (pHash) to skip unchanged frames.
-- Store per-window records + metadata (active window title, mouse, idle time).
-- Use SQLite + FTS or JSONL for searchable, compact storage.
+### 7) Expected results
+- High-fidelity text for normal UI sizes with window crops + OCR specialist.
+- Greatly reduced hallucination risk due to explicit pixel control and conservative prompts.
+- Stable, compact text records suitable for downstream classification.
 
-### 8) Expected results
-- Strong text fidelity on typical UI sizes (12–16px+) with window crops.
-- Small/low-contrast text may need sub-tiling or OCR cross-check.
-- Hallucinations drop substantially with strict prompts + temperature=0.
+### 8) Architectural considerations for future classification
+- **Session segmentation:** group by active window + idle gaps.
+- **Hierarchical labels:** client → project → activity.
+- **Feature set:** window titles, domains, file paths, OCR text blocks.
+- **Human-in-the-loop:** periodic review for drift and label correction.

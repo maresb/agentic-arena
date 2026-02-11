@@ -1,19 +1,19 @@
-## RISKS
-- **Ollama downscaling:** Pixel-budget caps may downscale 4K inputs, making text illegible.
-- **VRAM pressure:** High-res crops plus large quantization can exceed VRAM with KV cache.
-- **Wayland geometry limits:** Window bounds/z-order may be inaccessible; fallback tiling needed.
-- **Latency/UI contention:** Multi-window inference can be slow and may impact desktop responsiveness.
+## RISKS — Known risks, edge cases, trade-offs.
+- **Silent downscaling:** If max pixel budgets are not enforced explicitly, 4K crops can be downscaled, recreating hallucination risk.
+- **Dimension rounding:** Qwen3-VL expects resized dimensions in multiples of 32; incorrect rounding can misalign coordinates and degrade OCR.
+- **VRAM pressure:** Large crops and higher precision can exceed VRAM once visual KV cache is included.
+- **Wayland geometry limits:** Window bounds/z-order may be inaccessible; fallback tiling required.
+- **Latency/UI contention:** Multi-window inference plus OCR passes can be slow and impact desktop responsiveness.
 - **JSON validity:** Long outputs can break JSON; requires repair/retry logic.
-- **Occlusions:** Partially visible windows yield incomplete or conflicting text.
-- **Small/low-contrast text:** Thin fonts and low contrast reduce OCR accuracy.
+- **OCR disagreement:** GLM-OCR and Qwen3-VL may disagree; requires conflict-resolution rules.
 
-## OPEN QUESTIONS
-- What is the effective `max_pixels` behavior in your Ollama build?
+## OPEN QUESTIONS — Uncertainties requiring verification.
+- What is the effective `max_pixels`/resize behavior in your Ollama build for Qwen3-VL?
 - Can your GNOME extension (or `gdbus`) reliably provide window geometry and z-order?
-- Which quantization level (Q4/Q5/Q6) yields acceptable OCR on your smallest UI text?
+- Which pixel budget (2.1 MP vs 4.2 MP) yields acceptable OCR for your smallest UI text?
 - How many window crops can be batched per request without exceeding context/VRAM limits?
 - Do you want a unified global description or only per-window records?
 - What change-detection threshold should trigger re-processing (hash delta, focus change)?
 
-## DISAGREEMENTS
+## DISAGREEMENTS — Any remaining substantive disagreements with other approaches, or "None."
 None.
