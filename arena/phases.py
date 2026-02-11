@@ -493,6 +493,7 @@ def step_evaluate(
             "votes": state.verify_votes,
             "scores": state.verify_scores,
             "divergences": state.verify_divergences,
+            "token_usage": dict(state.token_usage),
         },
         indent=2,
     )
