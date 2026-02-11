@@ -22,7 +22,6 @@ load_dotenv()  # Load .env before anything reads CURSOR_API_KEY
 from arena.git import default_repo_from_remote  # noqa: E402
 from arena.orchestrator import (  # noqa: E402
     arena_number_from_dir,
-    generate_final_report,
     latest_arena_dir,
     next_arena_dir,
     run_orchestrator,
@@ -236,7 +235,6 @@ def step(
 
     typer.echo(f"{before_phase} -> {state.phase} (round {before_round})")
     if state.completed:
-        generate_final_report(state, arena_dir)
         consensus = state.consensus_reached
         typer.echo(
             f"Arena complete: {'consensus reached' if consensus else 'no consensus (max rounds)'}"
