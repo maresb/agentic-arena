@@ -94,13 +94,16 @@ PART 2 — VERDICT (commit to {verdict_path})
 {{
   "convergence_score": <1-10>,
   "best_solutions": [<aliases exactly as written (e.g. "agent_a"), excluding your own ({alias}), at least one required>],
-  "remaining_disagreements": <count>,
+  "divergences": [
+    {{"topic": "<short label>", "description": "<what specifically differs and between whom>"}}
+  ],
   "rationale": "<why these solutions are best / what still differs>"
 }}
 
-Score 8+ only if all remaining differences are trivial (style, naming,
-formatting). Any substantive disagreement on logic, architecture, or
-correctness caps the score at 7.
+SCORING RULES (strictly enforced):
+- If your divergences list is EMPTY, your score MUST be 10.
+- If your divergences list is NON-EMPTY, your score MUST be 9 or lower.
+- Each divergence must be specific and actionable — not vague.
 
 Vote for the best solution(s) OTHER than your own.
 

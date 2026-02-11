@@ -81,8 +81,15 @@ class TestEvaluatePrompt:
         prompt = evaluate_prompt("agent_a", _make_agent_files(), 1, 0)
         assert "convergence_score" in prompt
         assert "best_solutions" in prompt
+        assert '"divergences"' in prompt
         assert "verdict" in prompt.lower()
         assert ".json" in prompt
+
+    def test_contains_divergence_scoring_rules(self) -> None:
+        prompt = evaluate_prompt("agent_a", _make_agent_files(), 1, 0)
+        assert "EMPTY" in prompt
+        assert "MUST be 10" in prompt
+        assert "9 or lower" in prompt
 
     def test_contains_file_paths(self) -> None:
         prompt = evaluate_prompt("agent_b", _make_agent_files(), 3, 0)
