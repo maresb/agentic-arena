@@ -9,6 +9,7 @@
 - Lengthy and potentially heavy for an initial prototype.
 - Anchored on Qwen2.5-VL rather than the newer Qwen3-VL line.
 - No OCR-specialist model for text-heavy windows; relies on VLM-only extraction.
+- Pixel-budget controls and multiples-of-32 resizing are not emphasized.
 
 ### Errors
 - Primary model choice is outdated relative to the 2026 guidance (Qwen2.5-VL vs Qwen3-VL).
@@ -34,7 +35,6 @@
 - JSON reliability measures and classification-ready storage (delta hashing).
 
 ### Weaknesses
-- Earlier versions did not include Qwen3-VL or GLM-OCR; those are now integrated.
 - Could still be clearer about Qwen3-VL’s multiples-of-32 resizing requirement in all steps.
 
 ### Errors

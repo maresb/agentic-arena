@@ -1,5 +1,5 @@
 {
-  "convergence_score": 7,
+  "convergence_score": 6,
   "best_solutions": ["agent_a"],
   "divergences": [
     {
@@ -9,7 +9,11 @@
     {
       "topic": "ocr-specialist-stack",
       "description": "Agent A and Agent C do not include an OCR-specialist model (e.g., GLM-OCR), while the updated guidance recommends a hybrid VLM + OCR stack for faithful text extraction."
+    },
+    {
+      "topic": "pixel-budget-controls",
+      "description": "Agent B specifies explicit pixel budgets and multiples-of-32 resizing for Qwen3-VL, while Agent A and C do not emphasize these controls."
     }
   ],
-  "rationale": "Agent A is the most implementation-ready, but both A and C diverge on model generation and OCR specialist inclusion. These are substantive architecture differences, so convergence is moderate."
+  "rationale": "Agent A remains the most implementation-ready, but both A and C diverge on model generation, OCR specialist inclusion, and pixel-budget controls. These are substantive architecture differences, so convergence is moderate."
 }
