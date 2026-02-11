@@ -235,7 +235,11 @@ class TestStepEvaluate:
 
     @patch("arena.phases.fetch_file_from_branch")
     def test_low_score_transitions_to_generate(self, mock_fetch: MagicMock) -> None:
-        """Score < 9 means no consensus -> transitions to GENERATE."""
+        """Score < 9 means no consensus -> transitions to GENERATE.
+
+        Note: round increment and transient-state clearing happen in
+        step_once (after archiving), not in step_evaluate.
+        """
         mock_fetch.side_effect = _branch_file_mock(
             verdict_json=_make_vote_json(score=5)
         ).side_effect
@@ -245,9 +249,10 @@ class TestStepEvaluate:
         step_evaluate(state, api)
 
         assert state.phase == Phase.GENERATE
-        assert state.round == 1  # round incremented
-        for alias in state.alias_mapping:
-            assert state.phase_progress[alias] == ProgressStatus.PENDING
+        assert state.round == 0  # round NOT yet incremented (step_once does it)
+        # Transient state is preserved for archiving
+        assert state.verify_scores != {}
+        assert state.verify_votes != {}
 
     @patch("arena.phases.fetch_file_from_branch")
     def test_high_score_unanimous_reaches_consensus(

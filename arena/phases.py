@@ -578,16 +578,7 @@ def step_evaluate(
         state.final_verdict = verdict_summary
     else:
         state.final_verdict = verdict_summary
-        state.round += 1
         state.phase = Phase.GENERATE
-        state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
-        # Clear per-round transient state for the next generate phase
-        state.critiques = {}
-        state.verify_votes = {}
-        state.verify_scores = {}
-        state.verify_divergences = {}
-        state.verify_winner = None
-        state.verify_results = []
 
     state.sent_msg_counts = {}
     _save()

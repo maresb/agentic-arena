@@ -532,27 +532,34 @@ def generate_final_report(state: ArenaState, arena_dir: str) -> None:
     _write_winning_solution(state, arena_dir)
 
 
-def reopen_arena(state: ArenaState) -> None:
-    """Reset a completed arena so it can run another generate-evaluate cycle.
+def _advance_round(state: ArenaState) -> None:
+    """Increment the round counter and clear per-round transient state.
 
-    Increments the round counter, sets the phase to GENERATE, and clears
-    all per-round transient state and completion flags.  The caller is
-    responsible for persisting the state afterwards.
+    Called by :func:`step_once` after archiving, and by
+    :func:`reopen_arena` when reopening a completed arena.
     """
-    state.completed = False
-    state.consensus_reached = None
-    state.final_verdict = None
     state.round += 1
-    state.phase = Phase.GENERATE
     state.phase_progress = {a: ProgressStatus.PENDING for a in state.alias_mapping}
     state.sent_msg_counts = {}
-    # Clear per-round transient state
     state.critiques = {}
     state.verify_votes = {}
     state.verify_scores = {}
     state.verify_divergences = {}
     state.verify_winner = None
     state.verify_results = []
+
+
+def reopen_arena(state: ArenaState) -> None:
+    """Reset a completed arena so it can run another generate-evaluate cycle.
+
+    Clears completion flags, sets phase to GENERATE, then advances the
+    round.  The caller is responsible for persisting the state afterwards.
+    """
+    state.completed = False
+    state.consensus_reached = None
+    state.final_verdict = None
+    state.phase = Phase.GENERATE
+    _advance_round(state)
 
 
 PENDING_COMMENTS_FILE = "pending-comments.json"
@@ -672,6 +679,12 @@ def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
     update_report(state, arena_dir)
     if state.completed:
         _write_winning_solution(state, arena_dir)
+
+    # Round bookkeeping: if evaluate decided to continue, advance the round
+    # and clear transient state *after* archiving has captured it.
+    if before_phase == Phase.EVALUATE and state.phase == Phase.GENERATE:
+        _advance_round(state)
+
     save_state(state, state_path)
     return state
 
