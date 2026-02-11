@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from arena.orchestrator import (
     PENDING_COMMENTS_FILE,
     _archive_round,
+    _mermaid_vote_graph,
     _write_winning_solution,
     deliver_pending_comments,
     generate_final_report,
@@ -147,6 +148,175 @@ class TestUpdateReport:
                 content = f.read()
             assert "Token Usage" in content
             assert "5,000" in content
+
+
+class TestMermaidVoteGraph:
+    """Tests for the mermaid vote diagram helper."""
+
+    def test_basic_structure(self) -> None:
+        aliases = ["agent_a", "agent_b", "agent_c"]
+        alias_mapping = {"agent_a": "opus", "agent_b": "gpt", "agent_c": "gemini"}
+        scores = {"agent_a": 10, "agent_b": 7, "agent_c": 10}
+        votes = {"agent_a": ["agent_b"], "agent_b": ["agent_a"], "agent_c": ["agent_a"]}
+
+        result = _mermaid_vote_graph(aliases, alias_mapping, scores, votes)
+        text = "\n".join(result)
+
+        assert "```mermaid" in text
+        assert "graph" in text
+        assert "**agent_a**" in text
+        assert "opus" in text
+        assert "Score: 10" in text
+        assert "agent_a --> agent_b" in text
+        assert "agent_b --> agent_a" in text
+        assert "agent_c --> agent_a" in text
+        assert text.rstrip().endswith("```")
+
+    def test_no_label_on_arrows(self) -> None:
+        aliases = ["agent_a", "agent_b"]
+        alias_mapping = {"agent_a": "opus", "agent_b": "gpt"}
+        scores = {"agent_a": 10, "agent_b": 8}
+        votes = {"agent_a": ["agent_b"], "agent_b": ["agent_a"]}
+
+        result = _mermaid_vote_graph(aliases, alias_mapping, scores, votes)
+        text = "\n".join(result)
+
+        # Should not contain edge labels
+        assert "voted" not in text
+        assert "|" not in text.split("```mermaid")[1].split("```")[0]
+
+    def test_skips_unknown_votee(self) -> None:
+        aliases = ["agent_a", "agent_b"]
+        alias_mapping = {"agent_a": "opus", "agent_b": "gpt"}
+        scores = {"agent_a": 10, "agent_b": 8}
+        votes = {"agent_a": ["nonexistent"], "agent_b": ["agent_a"]}
+
+        result = _mermaid_vote_graph(aliases, alias_mapping, scores, votes)
+        text = "\n".join(result)
+
+        assert "nonexistent" not in text
+        assert "agent_b --> agent_a" in text
+
+    def test_empty_votes(self) -> None:
+        aliases = ["agent_a", "agent_b"]
+        alias_mapping = {"agent_a": "opus", "agent_b": "gpt"}
+        scores = {"agent_a": 5, "agent_b": 5}
+        votes: dict[str, list[str]] = {}
+
+        result = _mermaid_vote_graph(aliases, alias_mapping, scores, votes)
+        text = "\n".join(result)
+
+        # Should still have nodes but no edges
+        assert "**agent_a**" in text
+        assert "-->" not in text
+
+
+class TestReportTokenDeltas:
+    """Tests for per-round token deltas in the report."""
+
+    def test_single_round_shows_tokens(self) -> None:
+        state = init_state(task="test", repo="r")
+        aliases = list(state.alias_mapping.keys())
+        state.token_usage = {aliases[0]: 1000, aliases[1]: 2000, aliases[2]: 3000}
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {aliases[0]: [aliases[1]]},
+                    "scores": {a: 5 for a in aliases},
+                    "divergences": {},
+                    "token_usage": {
+                        aliases[0]: 1000,
+                        aliases[1]: 2000,
+                        aliases[2]: 3000,
+                    },
+                }
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Tokens" in content
+            assert "1,000" in content
+            assert "2,000" in content
+            assert "3,000" in content
+
+    def test_two_rounds_shows_deltas(self) -> None:
+        state = init_state(task="test", repo="r")
+        aliases = list(state.alias_mapping.keys())
+        state.token_usage = {aliases[0]: 5000, aliases[1]: 8000}
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {},
+                    "scores": {a: 5 for a in aliases},
+                    "divergences": {},
+                    "token_usage": {aliases[0]: 2000, aliases[1]: 3000},
+                }
+            ),
+            json.dumps(
+                {
+                    "votes": {},
+                    "scores": {a: 7 for a in aliases},
+                    "divergences": {},
+                    "token_usage": {aliases[0]: 5000, aliases[1]: 8000},
+                }
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            # Round 1 should show deltas: 5000-2000=3000, 8000-3000=5000
+            assert "3,000" in content
+            assert "5,000" in content
+
+    def test_no_token_data_omits_column(self) -> None:
+        state = init_state(task="test", repo="r")
+        aliases = list(state.alias_mapping.keys())
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {},
+                    "scores": {a: 5 for a in aliases},
+                    "divergences": {},
+                }
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            # Table header should NOT have Tokens column
+            assert "| Tokens |" not in content
+
+
+class TestReportMermaidDiagrams:
+    """Tests for mermaid vote diagrams in the report."""
+
+    def test_mermaid_block_in_report(self) -> None:
+        state = init_state(task="test", repo="r")
+        aliases = list(state.alias_mapping.keys())
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {aliases[0]: [aliases[1]], aliases[1]: [aliases[0]]},
+                    "scores": {a: 8 for a in aliases},
+                    "divergences": {},
+                }
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "```mermaid" in content
+            assert f"{aliases[0]} --> {aliases[1]}" in content
+            assert f"{aliases[1]} --> {aliases[0]}" in content
 
 
 class TestWriteWinningSolution:
