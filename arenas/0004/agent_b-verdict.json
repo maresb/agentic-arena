@@ -1,6 +1,15 @@
 {
-  "convergence_score": 6,
+  "convergence_score": 7,
   "best_solutions": ["agent_a"],
-  "remaining_disagreements": 2,
-  "rationale": "Agent A remains the most complete and implementation-ready, but all solutions still recommend Qwen2.5-VL and omit an OCR-specialist despite updated 2026 guidance. These are substantive architecture differences, so convergence is limited."
+  "divergences": [
+    {
+      "topic": "primary-model-generation",
+      "description": "Agent A and Agent C still recommend Qwen2.5-VL, while the updated guidance indicates Qwen3-VL should be the primary 2026-era choice."
+    },
+    {
+      "topic": "ocr-specialist-stack",
+      "description": "Agent A and Agent C do not include an OCR-specialist model (e.g., GLM-OCR), while the updated guidance recommends a hybrid VLM + OCR stack for faithful text extraction."
+    }
+  ],
+  "rationale": "Agent A is the most implementation-ready, but both A and C diverge on model generation and OCR specialist inclusion. These are substantive architecture differences, so convergence is moderate."
 }

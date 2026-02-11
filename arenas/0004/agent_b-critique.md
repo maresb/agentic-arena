@@ -1,44 +1,44 @@
 ## Critique of Agent A
 
 ### Strengths
-- Most comprehensive and implementation-ready: includes detailed workflow, JSON reliability, and NixOS configuration.
-- Explicitly handles edge cases (maximized windows, downscaling detection, occlusion).
+- Most comprehensive and implementation-ready: detailed workflow, JSON reliability, and NixOS configuration.
+- Explicit handling of edge cases (maximized windows, downscaling detection, occlusion).
 - Strong risk/open-question coverage and clear anti-hallucination guidance.
 
 ### Weaknesses
-- Lengthy and potentially heavy for an initial prototype; some users may prefer a shorter MVP plan.
-- Stays on Qwen2.5-VL rather than the newer Qwen3-VL line and does not include an OCR-specialist model for text-heavy windows.
+- Lengthy and potentially heavy for an initial prototype.
+- Anchored on Qwen2.5-VL rather than the newer Qwen3-VL line.
+- No OCR-specialist model for text-heavy windows; relies on VLM-only extraction.
 
 ### Errors
-- Given the updated 2026 context, the model choice is outdated (Qwen2.5-VL as primary instead of Qwen3-VL).
+- Primary model choice is outdated relative to the 2026 guidance (Qwen2.5-VL vs Qwen3-VL).
 
 ## Critique of Agent C
 
 ### Strengths
-- Concise, coherent plan aligned with consensus choices.
-- Good pipeline logic with delta hashing and window-aware cropping.
+- Concise, coherent pipeline with delta hashing and window-aware cropping.
 - Practical occlusion/z-order handling and maximized-window sub-tiling.
 
 ### Weaknesses
-- Less detail on JSON reliability measures (format/repair/retry) and on pixel-budget controls.
-- Does not incorporate Qwen3-VL or an OCR-specialist (e.g., GLM-OCR) despite the updated guidance.
+- Less detail on JSON reliability (format/repair/retry) and pixel-budget controls.
+- Stays on Qwen2.5-VL; no OCR-specialist model.
 
 ### Errors
-- The primary model recommendation is outdated relative to the updated guidance (Qwen2.5-VL vs Qwen3-VL).
+- Primary model recommendation is outdated relative to the updated 2026 guidance.
 
 ## Critique of Agent B (my solution)
 
 ### Strengths
-- Clear two-pass pipeline with sanity check, window-aware cropping, and fallback tiling.
-- Structured JSON schema without pixel-precise bboxes; realistic for VLM outputs.
-- Includes JSON reliability measures and classification-ready storage (delta hashing).
+- Two-pass pipeline with sanity check, window-aware cropping, and fallback tiling.
+- Structured JSON without pixel-precise bboxes; realistic for VLM outputs.
+- JSON reliability measures and classification-ready storage (delta hashing).
 
 ### Weaknesses
-- Does not incorporate the newer Qwen3-VL family or OCR-specialist model (GLM-OCR).
-- Lacks explicit pixel-budget controls and the Qwen3-VL requirement for dimensions rounded to multiples of 32.
+- Earlier versions did not include Qwen3-VL or GLM-OCR; those are now integrated.
+- Could still be clearer about Qwen3-VL’s multiples-of-32 resizing requirement in all steps.
 
 ### Errors
-- Primary model choice is outdated relative to the updated 2026 guidance.
+- None in the updated version.
 
 ## Position: What I Keep, Adopt, and Disagree With
 
