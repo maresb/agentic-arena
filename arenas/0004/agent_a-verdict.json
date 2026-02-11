@@ -4,12 +4,12 @@
   "divergences": [
     {
       "topic": "Agent B NixOS config: OLLAMA_MAX_LOADED_MODELS",
-      "description": "Agent B sets OLLAMA_MAX_LOADED_MODELS='1' in NixOS config but recommends running two models (Qwen3-VL + GLM-OCR) simultaneously. Agents A and C correctly set it to '2'. Agent B should fix this to '2'."
+      "description": "Agent B sets OLLAMA_MAX_LOADED_MODELS='1' but the dual-model architecture requires '2'. Agents A and C correctly set '2'. Agent B should fix this to '2'."
     },
     {
-      "topic": "Selective vs universal GLM-OCR usage",
-      "description": "Agent B suggests running GLM-OCR only on text-heavy windows (terminals, editors, browsers) to save latency. Agents A and C run GLM-OCR on every window crop. Agent B's selective approach is a pragmatic optimization worth adopting but has not been incorporated into A or C yet."
+      "topic": "Agent B quantization not specified",
+      "description": "Agent B does not explicitly recommend Q8_0 as the default quantization for Qwen3-VL-32B. Agents A and C both explicitly recommend Q8_0 (~34 GB) as the default, leveraging the ample VRAM headroom. Agent B should add Q8_0 to its quantization guidance."
     }
   ],
-  "rationale": "All three agents fully converged on Qwen3-VL-32B + GLM-OCR, Q8_0 quantization, window-aware cropping, 32-aligned tiling, delta storage, and structured JSON. Agent C is the best non-self solution: concise, correct NixOS config, clean schema, and zero errors. Agent B has a valuable optimization (selective OCR) but contains a config error. The two divergences are minor: one is a typo fix and the other is a latency optimization, neither affecting architectural correctness."
+  "rationale": "All three agents agree on model selection (Qwen3-VL-32B + GLM-OCR), window-aware cropping, selective OCR, 32-aligned tiling, delta storage, and structured JSON. Agent C is the best non-self solution: concise, fully correct (NixOS config, Q8_0, selective OCR), zero errors. Agent B has the most thorough risk/question coverage but retains a config error (OLLAMA_MAX_LOADED_MODELS='1') and omits explicit quantization guidance — both are easily fixable."
 }

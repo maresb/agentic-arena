@@ -1,22 +1,18 @@
-# Round 04 Evaluate — Agent A Critique
+# Round 05 Evaluate — Agent A Critique
 
 ## Agent C
 
 ### Strengths
-1. **Complete pivot to Qwen3-VL + GLM-OCR.** Correctly adopted both models with proper
-   quantization (Q8_0), 32-aligned tiling, and dual-model inference.
-2. **Clean schema separation.** Uses `semantic_summary` (VLM) vs `extracted_text` (OCR)
-   as distinct fields — clear and self-documenting.
-3. **NixOS config correct.** `OLLAMA_MAX_LOADED_MODELS = "2"` matches the dual-model
-   requirement.
-4. **Concise.** Covers all decisions in ~100 lines without losing critical detail.
-5. **Maximized window edge case** (split into 2 vertical tiles) retained from earlier
-   rounds.
+1. **Fully updated and correct.** Qwen3-VL-32B + GLM-OCR, Q8_0, 32-aligned tiles,
+   `OLLAMA_MAX_LOADED_MODELS = "2"`, selective OCR, delta hashing — all correct.
+2. **Adopted selective GLM-OCR.** Now includes logic to skip OCR on image-heavy windows,
+   matching the consensus optimization.
+3. **Clean schema.** `semantic_summary` + `extracted_text` as distinct fields.
+4. **Concise.** Complete coverage in ~100 lines.
 
 ### Weaknesses
-1. **No pseudocode.** Architectural guidance only; implementation left to the user.
-2. **Only 2 open questions.** Missing pixel budget verification, quantization A/B
-   testing, and zoom tool viability.
+1. **No pseudocode.** Still architectural guidance only.
+2. **Only 2 open questions.** Light compared to Agent B's 7 items.
 
 ### Errors
 - None.
@@ -26,44 +22,36 @@
 ## Agent B
 
 ### Strengths
-1. **Selective GLM-OCR usage.** Uniquely suggests running GLM-OCR only on text-heavy
-   windows (terminals, editors, browsers) and skipping it on image-heavy windows. This
-   is a pragmatic optimization that reduces latency without sacrificing quality where
-   it matters most.
-2. **Pixel budget guidance.** Explicitly offers two budget options (2.1 MP for speed,
-   4.2 MP for dense code) with clear trade-off description.
-3. **Comprehensive open questions** (6 items) including batching limits and change
-   detection thresholds.
-4. **OCR disagreement risk** explicitly identified — what to do when Qwen3-VL and
-   GLM-OCR produce conflicting text.
-5. **Clean "when to use which" section** clarifying role separation.
+1. **Comprehensive open questions** (7 items) — most thorough risk/question coverage,
+   including "OCR over-trust" (OCR misreading UI chrome) which is a novel and valid risk
+   not covered by other agents.
+2. **Pixel budget options.** Two concrete budgets (2.1 MP, 4.2 MP) with trade-offs.
+3. **Good "when to use which" section** for role separation.
+4. **Resolution control guidance.** Explicit about `min_pixels`/`max_pixels` and the
+   need to disable double-resizing in `qwen-vl-utils`.
 
 ### Weaknesses
-1. **NixOS config error.** Sets `OLLAMA_MAX_LOADED_MODELS = "1"` but the solution
-   requires running two models (Qwen3-VL + GLM-OCR). Should be `"2"`. This is the only
-   substantive error across all three solutions.
-2. **No pseudocode.** Architectural guidance only.
+1. **NixOS config still has `OLLAMA_MAX_LOADED_MODELS = "1"`.** This was flagged in
+   round 04 and remains unfixed. Must be `"2"` for dual-model serving.
+2. **Quantization not explicitly specified.** The solution doesn't state Q8_0 as the
+   recommended default. Agents A and C both explicitly recommend Q8_0.
 
 ### Errors
-1. `OLLAMA_MAX_LOADED_MODELS = "1"` contradicts the dual-model architecture. Must be
-   `"2"` to keep both models loaded simultaneously.
+1. `OLLAMA_MAX_LOADED_MODELS = "1"` contradicts dual-model architecture. Should be `"2"`.
 
 ---
 
 ## Agent A (Self)
 
 ### Strengths
-1. **Working pseudocode** with pyvips/Pillow fallback, tiling, dual-model inference,
-   and occlusion skipping.
-2. **Normalized output.** `vlm_descriptions` and `ocr_text` are always lists.
-3. **NixOS config correct** with `OLLAMA_MAX_LOADED_MODELS = "2"`.
-4. **Most detailed tile placement** with specific coordinate examples.
-5. **Zoom-in tool pathway** documented as future upgrade.
+1. **Working pseudocode** with selective OCR (`TEXT_HEAVY_APPS`, `is_text_heavy()`),
+   tiling, dual-model inference, and occlusion skipping.
+2. **Correct NixOS config** with `OLLAMA_MAX_LOADED_MODELS = "2"`.
+3. **Consistent typing.** `ocr_text` is always a list (empty when skipped).
+4. **New risk R4** (selective OCR missing text in unexpected places) with mitigation.
 
 ### Weaknesses
-1. **Runs GLM-OCR on every window.** Agent B's suggestion to run OCR selectively on
-   text-heavy windows is more efficient and should be adopted.
-2. **Longest solution** (~350 lines). Could be more concise.
+1. **Longest solution.** ~326 lines. Could be tighter without losing signal.
 
 ### Errors
 - None.
@@ -73,14 +61,12 @@
 ## Position
 
 ### Keeping
-Everything from my current solution. The dual-model architecture, pseudocode, NixOS
-config, tiling math, and storage schema are all correct and converged.
+Everything. The solution is final, correct, and incorporates all cross-agent feedback.
 
 ### Adopting
-- **From Agent B:** Selective GLM-OCR usage — run OCR only on text-heavy windows
-  (terminals, editors, browsers, PDFs) and skip it on image-heavy windows (viewers,
-  dashboards with few text elements). This reduces total latency by ~30-40% for typical
-  desktops without sacrificing text fidelity where it matters.
+- **From Agent B:** The "OCR over-trust" risk — OCR can misread UI chrome (icons, small
+  labels). Worth noting that GLM-OCR output should not blindly replace Qwen3-VL's
+  semantic labels without confidence checks. This is a valid nuance.
 
 ### Disagreements
-**None on architecture.** The only issue is Agent B's config typo (`OLLAMA_MAX_LOADED_MODELS = "1"` should be `"2"`).
+**None on architecture.** Agent B's config error is the only remaining issue.
