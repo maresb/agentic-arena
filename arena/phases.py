@@ -419,6 +419,7 @@ def step_evaluate(
         state.verify_votes[alias] = verdict.best_solutions
         if verdict.convergence_score is not None:
             state.verify_scores[alias] = verdict.convergence_score
+        state.verify_divergences[alias] = [d.model_dump() for d in verdict.divergences]
 
         state.phase_progress[alias] = ProgressStatus.DONE
         _record_timing_end(state, alias, "evaluate")
@@ -426,7 +427,11 @@ def step_evaluate(
 
     # ── Accumulate verdict text for history ──
     verdict_summary = json.dumps(
-        {"votes": state.verify_votes, "scores": state.verify_scores},
+        {
+            "votes": state.verify_votes,
+            "scores": state.verify_scores,
+            "divergences": state.verify_divergences,
+        },
         indent=2,
     )
     state.verdict_history.append(verdict_summary)
@@ -615,6 +620,7 @@ def step_revise(
     state.critiques = {}
     state.verify_votes = {}
     state.verify_scores = {}
+    state.verify_divergences = {}
     state.verify_winner = None
     state.verify_results = []
     _save()

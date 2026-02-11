@@ -170,10 +170,12 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
         # Archive per-agent verdict
         votes = state.verify_votes.get(alias)
         score = state.verify_scores.get(alias)
+        divergences = state.verify_divergences.get(alias, [])
         if votes is not None or score is not None:
-            verdict_data = {
+            verdict_data: dict = {
                 "convergence_score": score,
                 "best_solutions": votes or [],
+                "divergences": divergences,
             }
             verdict_json = json.dumps(verdict_data, indent=2)
             uid = _content_uid(verdict_json)

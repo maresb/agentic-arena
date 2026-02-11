@@ -63,10 +63,15 @@ def make_mock_api(
 def _make_vote_response(score: int = 9, best: list[str] | None = None) -> list[dict]:
     """Build a mock conversation where the latest message is a vote verdict JSON."""
     best = best or ["agent_a"]
+    divergences = (
+        []
+        if score >= 10
+        else [{"topic": "test issue", "description": "still disagree"}]
+    )
     verdict = {
         "convergence_score": score,
         "best_solutions": best,
-        "remaining_disagreements": 0 if score >= 8 else 2,
+        "divergences": divergences,
         "rationale": "Test rationale",
     }
     return [
@@ -80,11 +85,16 @@ def _make_vote_response(score: int = 9, best: list[str] | None = None) -> list[d
 def _make_vote_json(score: int = 9, best: list[str] | None = None) -> str:
     """Build verdict JSON string for mocking committed verdict files."""
     best = best or ["agent_a"]
+    divergences = (
+        []
+        if score >= 10
+        else [{"topic": "test issue", "description": "still disagree"}]
+    )
     return json.dumps(
         {
             "convergence_score": score,
             "best_solutions": best,
-            "remaining_disagreements": 0 if score >= 8 else 2,
+            "divergences": divergences,
             "rationale": "Test rationale",
         }
     )
@@ -397,6 +407,7 @@ class TestStepRevise:
         state = self._make_evaluated_state()
         state.verify_votes = {"agent_a": ["agent_b"]}
         state.verify_scores = {"agent_a": 5}
+        state.verify_divergences = {"agent_a": [{"topic": "x", "description": "y"}]}
         api = make_mock_api()
 
         step_revise(state, api)
@@ -404,4 +415,5 @@ class TestStepRevise:
         assert state.critiques == {}
         assert state.verify_votes == {}
         assert state.verify_scores == {}
+        assert state.verify_divergences == {}
         assert state.verify_winner is None
