@@ -3,44 +3,28 @@
 import json
 import os
 import tempfile
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from arena.orchestrator import (
     _archive_round,
+    _write_winning_solution,
     generate_final_report,
     latest_arena_dir,
     next_arena_dir,
     step_once,
+    update_report,
 )
 from arena.state import Phase, init_state, save_state
 
 
-class TestGenerateFinalReport:
+class TestUpdateReport:
+    """Tests for the rolling report generator."""
+
     def test_report_created(self) -> None:
         state = init_state(task="Test task", repo="owner/repo")
-        state.round = 1
-        state.consensus_reached = True
-        state.verify_winner = "agent_a"
-        state.verify_votes = {
-            "agent_a": ["agent_b"],
-            "agent_b": ["agent_a"],
-            "agent_c": ["agent_a"],
-        }
-        state.verify_scores = {"agent_a": 9, "agent_b": 9, "agent_c": 9}
-        state.final_verdict = json.dumps({"votes": state.verify_votes})
-        state.solutions = {
-            "agent_a": "Solution A",
-            "agent_b": "Solution B",
-            "agent_c": "Solution C",
-        }
-        state.analyses = {
-            "agent_a": "Analysis A",
-            "agent_b": "Analysis B",
-            "agent_c": "Analysis C",
-        }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            generate_final_report(state, tmpdir)
+            update_report(state, tmpdir)
             report_path = os.path.join(tmpdir, "report.md")
             assert os.path.exists(report_path)
 
@@ -49,75 +33,181 @@ class TestGenerateFinalReport:
 
             assert "# Arena Report" in content
             assert "Test task" in content
-            assert "Consensus:** Yes" in content
-            assert "Solution A" in content
-            assert "Solution B" in content
-            assert "Solution C" in content
-            assert "Voting Results" in content
 
-    def test_report_without_consensus(self) -> None:
-        state = init_state(task="Hard task", repo="owner/repo")
-        state.round = 3
-        state.consensus_reached = False
-        state.final_verdict = "Still disagreeing."
-        state.solutions = {"agent_a": "Sol"}
-        state.analyses = {}
+    def test_report_contains_agents_table(self) -> None:
+        state = init_state(task="test", repo="r")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            generate_final_report(state, tmpdir)
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "| Alias | Model |" in content
+            assert "agent_a" in content
+
+    def test_report_shows_consensus(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.consensus_reached = True
+        state.completed = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Consensus:** Yes" in content
+
+    def test_report_shows_no_consensus(self) -> None:
+        state = init_state(task="Hard task", repo="r")
+        state.consensus_reached = False
+        state.completed = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
             with open(os.path.join(tmpdir, "report.md")) as f:
                 content = f.read()
             assert "Consensus:** No" in content
 
-    def test_report_includes_alias_mapping(self) -> None:
+    def test_report_includes_verdict_history_rounds(self) -> None:
         state = init_state(task="test", repo="r")
-        state.final_verdict = "verdict"
-        state.solutions = {}
+        state.solutions = {"agent_a": "Sol A", "agent_b": "Sol B", "agent_c": "Sol C"}
+        state.analyses = {"agent_a": "Ana A", "agent_b": "Ana B", "agent_c": "Ana C"}
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {"agent_a": ["agent_b"], "agent_b": ["agent_a"]},
+                    "scores": {"agent_a": 8, "agent_b": 9},
+                    "divergences": {},
+                }
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "## Round 0" in content
+            assert "Min score:** 8" in content
+
+    def test_report_does_not_inline_solutions(self) -> None:
+        """The new report should NOT inline full solution text."""
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "UNIQUE_SOLUTION_TEXT_MARKER"}
         state.analyses = {}
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            generate_final_report(state, tmpdir)
+            update_report(state, tmpdir)
             with open(os.path.join(tmpdir, "report.md")) as f:
                 content = f.read()
-            assert "alias_mapping" in content.lower() or "Alias mapping" in content
+            assert "UNIQUE_SOLUTION_TEXT_MARKER" not in content
 
-    def test_report_includes_verify_results(self) -> None:
-        state = init_state(
-            task="test",
-            repo="r",
-            verify_commands=["pixi run pytest", "pixi run mypy ."],
-        )
-        state.final_verdict = "All good"
-        state.solutions = {"agent_a": "Sol"}
-        state.analyses = {}
-        state.verify_results = ["All tests passed", "No type errors"]
+    def test_report_includes_archive_links(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.solutions = {"agent_a": "Sol A", "agent_b": "Sol B", "agent_c": "Sol C"}
+        state.analyses = {"agent_a": "Ana A", "agent_b": "Ana B", "agent_c": "Ana C"}
+        state.critiques = {"agent_a": "Crit A"}
+        state.verdict_history = [
+            json.dumps(
+                {
+                    "votes": {"agent_a": ["agent_b"]},
+                    "scores": {"agent_a": 9},
+                    "divergences": {},
+                }
+            ),
+        ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            generate_final_report(state, tmpdir)
+            update_report(state, tmpdir)
             with open(os.path.join(tmpdir, "report.md")) as f:
                 content = f.read()
-            assert "Verify Command Results" in content
-            assert "pixi run pytest" in content
-            assert "All tests passed" in content
-            assert "pixi run mypy ." in content
-            assert "No type errors" in content
+            assert "[solution](" in content
+            assert "[analysis](" in content
+            assert "[critique](" in content
+            assert "[verdict](" in content
 
-    def test_report_includes_vote_breakdown(self) -> None:
+    def test_report_shows_winner(self) -> None:
         state = init_state(task="test", repo="r")
-        state.verify_votes = {"agent_a": ["agent_b"], "agent_b": ["agent_a"]}
-        state.verify_scores = {"agent_a": 8, "agent_b": 8}
         state.verify_winner = "agent_a"
         state.consensus_reached = True
-        state.solutions = {}
-        state.analyses = {}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Winner" in content
+            assert "agent_a" in content
+
+    def test_report_includes_token_usage(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.token_usage = {"agent_a": 5000}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            update_report(state, tmpdir)
+            with open(os.path.join(tmpdir, "report.md")) as f:
+                content = f.read()
+            assert "Token Usage" in content
+            assert "5,000" in content
+
+
+class TestWriteWinningSolution:
+    """Tests for the winning-solution.md generator."""
+
+    def test_writes_winner(self) -> None:
+        state = init_state(task="test", repo="owner/repo")
+        state.verify_winner = "agent_a"
+        state.verify_scores = {"agent_a": 10, "agent_b": 10}
+        state.solutions = {"agent_a": "Winner solution text"}
+        state.analyses = {"agent_a": "Winner analysis text"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_winning_solution(state, tmpdir)
+            path = os.path.join(tmpdir, "winning-solution.md")
+            assert os.path.exists(path)
+
+            with open(path) as f:
+                content = f.read()
+
+            assert "# Winning Solution" in content
+            assert "agent_a" in content
+            assert "Winner solution text" in content
+            assert "Winner analysis text" in content
+
+    def test_skips_if_no_winner(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.verify_winner = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_winning_solution(state, tmpdir)
+            assert not os.path.exists(os.path.join(tmpdir, "winning-solution.md"))
+
+    def test_includes_pr_link(self) -> None:
+        state = init_state(task="test", repo="owner/repo")
+        state.verify_winner = "agent_a"
+        state.verify_scores = {"agent_a": 10}
+        state.solutions = {"agent_a": "Sol"}
+        state.branch_names = {"agent_a": "cursor/branch-123"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_winning_solution(state, tmpdir)
+            with open(os.path.join(tmpdir, "winning-solution.md")) as f:
+                content = f.read()
+            assert "cursor/branch-123" in content
+            assert "owner/repo" in content
+
+
+class TestGenerateFinalReport:
+    """Legacy wrapper should produce both report.md and winning-solution.md."""
+
+    def test_creates_both_files(self) -> None:
+        state = init_state(task="test", repo="r")
+        state.verify_winner = "agent_a"
+        state.verify_scores = {"agent_a": 10}
+        state.consensus_reached = True
+        state.solutions = {"agent_a": "Sol"}
+        state.analyses = {"agent_a": "Ana"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             generate_final_report(state, tmpdir)
-            with open(os.path.join(tmpdir, "report.md")) as f:
-                content = f.read()
-            assert "Voting Results" in content
-            assert "score=8" in content
-            assert "Winner" in content
+            assert os.path.exists(os.path.join(tmpdir, "report.md"))
+            assert os.path.exists(os.path.join(tmpdir, "winning-solution.md"))
 
 
 class TestArchiveRound:
