@@ -184,132 +184,295 @@ def _archive_round(state: ArenaState, arena_dir: str) -> None:
             _archive_artifact(arena_dir, name, verdict_json)
 
 
-def generate_final_report(state: ArenaState, arena_dir: str) -> None:
-    """Generate a final Markdown report summarizing the arena run."""
-    consensus = state.consensus_reached if state.consensus_reached is not None else True
-    alias_display = {k: str(v) for k, v in state.alias_mapping.items()}
+def _archive_filename(
+    rnd: int,
+    phase_name: str,
+    model: str,
+    artifact: str,
+    content: str,
+    ext: str = "md",
+) -> str:
+    """Build the deterministic archive filename for a given artifact."""
+    phase_num = PHASE_NUMBERS.get(phase_name, 0)
+    uid = _content_uid(content)
+    return f"{rnd:02d}-{phase_num}-{phase_name}-{model}-{artifact}-{uid}.{ext}"
 
-    report_lines = [
+
+# ---------------------------------------------------------------------------
+# Rolling report
+# ---------------------------------------------------------------------------
+
+
+def update_report(state: ArenaState, arena_dir: str) -> None:
+    """Regenerate ``report.md`` from the current state.
+
+    Called after every phase so the report is always current.  The report
+    is compact — metadata, per-round score tables, and hyperlinks to
+    archived files.  No solution text is inlined.
+    """
+    lines: list[str] = []
+    consensus = state.consensus_reached
+    task_abbrev = state.config.task[:120] + (
+        "…" if len(state.config.task) > 120 else ""
+    )
+
+    # ── Header ──
+    lines += [
         "# Arena Report",
         "",
-        f"**Task:** {state.config.task}",
-        f"**Rounds:** {state.round}",
-        f"**Consensus:** {'Yes' if consensus else 'No'}",
-        f"**Alias mapping:** {alias_display}",
-        "",
-        "---",
-        "",
+        f"**Task:** {task_abbrev}",
+        f"**Round:** {state.round}",
+        f"**Phase:** {state.phase.value}",
+        f"**Completed:** {'Yes' if state.completed else 'No'}",
     ]
+    if consensus is not None:
+        lines.append(f"**Consensus:** {'Yes' if consensus else 'No'}")
+    if state.verify_winner:
+        winner_model = state.alias_mapping.get(state.verify_winner, "unknown")
+        lines.append(f"**Winner:** {state.verify_winner} ({winner_model})")
+    lines += ["", "### Agents", ""]
+    lines.append("| Alias | Model |")
+    lines.append("|-------|-------|")
+    for alias in state.alias_mapping:
+        model = state.alias_mapping.get(alias, "unknown")
+        lines.append(f"| {alias} | {model} |")
+    lines += ["", "---", ""]
 
-    # Voting results
-    if state.verify_scores or state.verify_votes:
-        report_lines.append("## Voting Results")
-        report_lines.append("")
+    # ── Per-round sections (built from verdict_history) ──
+    for rnd_idx, vh_json in enumerate(state.verdict_history):
+        try:
+            vh = json.loads(vh_json) if isinstance(vh_json, str) else vh_json
+        except (json.JSONDecodeError, TypeError):
+            vh = {}
+
+        rnd_votes: dict = vh.get("votes", {})
+        rnd_scores: dict = vh.get("scores", {})
+        rnd_divergences: dict = vh.get("divergences", {})
+
+        scores_list = list(rnd_scores.values())
+        final_score = min(scores_list) if scores_list else 0
+
+        lines.append(f"## Round {rnd_idx}")
+        lines.append("")
+
+        # Score/vote table
+        lines.append("| Agent | Model | Score | Voted for | Divergences |")
+        lines.append("|-------|-------|------:|-----------|-------------|")
+        for alias in state.alias_mapping:
+            model = str(state.alias_mapping.get(alias, "unknown"))
+            score = rnd_scores.get(alias, "—")
+            votes = ", ".join(rnd_votes.get(alias, []))
+            divs = rnd_divergences.get(alias, [])
+            div_count = len(divs) if isinstance(divs, list) else 0
+            lines.append(f"| {alias} | {model} | {score} | {votes} | {div_count} |")
+        lines.append("")
+        lines.append(f"**Min score:** {final_score}")
+        lines.append("")
+
+        # Divergence details (if any)
+        all_divs = [
+            (alias, d)
+            for alias in state.alias_mapping
+            for d in (
+                rnd_divergences.get(alias, [])
+                if isinstance(rnd_divergences.get(alias), list)
+                else []
+            )
+        ]
+        if all_divs:
+            lines.append("<details><summary>Divergences</summary>")
+            lines.append("")
+            for alias, d in all_divs:
+                topic = d.get("topic", "?") if isinstance(d, dict) else "?"
+                desc = d.get("description", "") if isinstance(d, dict) else str(d)
+                lines.append(f"- **{alias}** — *{topic}*: {desc}")
+            lines.append("")
+            lines.append("</details>")
+            lines.append("")
+
+        # Archive file links
+        lines.append("<details><summary>Archived files</summary>")
+        lines.append("")
+        for alias in state.alias_mapping:
+            model_san = sanitize_filename_component(
+                str(state.alias_mapping.get(alias, "unknown"))
+            )
+            # Determine the generate phase name for this round
+            gen_phase = "solve" if rnd_idx == 0 else "revise"
+
+            link_parts: list[str] = []
+
+            solution = state.solutions.get(alias)
+            if solution:
+                fname = _archive_filename(
+                    rnd_idx, gen_phase, model_san, "solution", solution
+                )
+                link_parts.append(f"[solution]({fname})")
+
+            analysis = state.analyses.get(alias)
+            if analysis:
+                fname = _archive_filename(
+                    rnd_idx, gen_phase, model_san, "analysis", analysis
+                )
+                link_parts.append(f"[analysis]({fname})")
+
+            critique = state.critiques.get(alias)
+            if critique:
+                fname = _archive_filename(
+                    rnd_idx, "evaluate", model_san, "critique", critique
+                )
+                link_parts.append(f"[critique]({fname})")
+
+            v_votes = rnd_votes.get(alias)
+            v_score = rnd_scores.get(alias)
+            if v_votes is not None or v_score is not None:
+                divs = rnd_divergences.get(alias, [])
+                verdict_data: dict = {
+                    "convergence_score": v_score,
+                    "best_solutions": v_votes or [],
+                    "divergences": divs,
+                }
+                verdict_str = json.dumps(verdict_data, indent=2)
+                fname = _archive_filename(
+                    rnd_idx, "evaluate", model_san, "verdict", verdict_str, ext="json"
+                )
+                link_parts.append(f"[verdict]({fname})")
+
+            if link_parts:
+                links = " · ".join(link_parts)
+                lines.append(f"- **{alias}** ({model_san}): {links}")
+
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # ── Current voting results (for the live/latest round) ──
+    if state.verify_scores and not state.verdict_history:
+        # Edge case: scores exist but no verdict_history entry yet
+        lines.append("## Current Voting")
+        lines.append("")
         for alias in state.alias_mapping:
             model = state.alias_mapping.get(alias, "unknown")
-            score = state.verify_scores.get(alias, "N/A")
-            votes = state.verify_votes.get(alias, [])
-            report_lines.append(
-                f"- **{alias}** ({model}): score={score}, voted for {votes}"
+            cur_score = state.verify_scores.get(alias, "—")
+            cur_votes = state.verify_votes.get(alias, [])
+            lines.append(
+                f"- **{alias}** ({model}): score={cur_score}, voted for {cur_votes}"
             )
-        scores = list(state.verify_scores.values())
-        final_score = min(scores) if scores else 0
-        report_lines.append(f"- **Final score:** {final_score} (min)")
-        if state.verify_winner:
-            winner_model = state.alias_mapping.get(state.verify_winner, "unknown")
-            report_lines.append(f"- **Winner:** {state.verify_winner} ({winner_model})")
-        report_lines.extend(["", "---", ""])
+        lines.append("")
+        lines.append("---")
+        lines.append("")
 
-    report_lines.append("## Final Solutions")
-    report_lines.append("")
-    for alias, solution in state.solutions.items():
-        model = state.alias_mapping.get(alias, "unknown")
-        report_lines.append(f"### {alias} ({model})")
-        report_lines.append("")
-        report_lines.append(solution)
-        report_lines.append("")
-
-    if state.analyses:
-        report_lines.append("---")
-        report_lines.append("")
-        report_lines.append("## Final Analyses")
-        report_lines.append("")
-        for alias, analysis in state.analyses.items():
-            model = state.alias_mapping.get(alias, "unknown")
-            report_lines.append(f"### {alias} ({model})")
-            report_lines.append("")
-            report_lines.append(analysis)
-            report_lines.append("")
-
-    if state.verify_results:
-        report_lines.append("---")
-        report_lines.append("")
-        report_lines.append("## Verify Command Results")
-        report_lines.append("")
-        for i, result in enumerate(state.verify_results):
-            cmd = (
-                state.config.verify_commands[i]
-                if i < len(state.config.verify_commands)
-                else f"command {i + 1}"
-            )
-            report_lines.append(f"### `{cmd}`")
-            report_lines.append("")
-            report_lines.append(result)
-            report_lines.append("")
-
-    # PR URL for the winning branch
+    # ── PR link ──
     if state.consensus_reached and state.branch_names and state.verify_winner:
         winner_alias = state.verify_winner
         if winner_alias in state.branch_names:
             branch = state.branch_names[winner_alias]
             repo = state.config.repo
-            if not repo.startswith("https://"):
-                repo_url = f"https://github.com/{repo}"
-            else:
-                repo_url = repo
+            repo_url = (
+                repo if repo.startswith("https://") else f"https://github.com/{repo}"
+            )
             pr_url = (
                 f"{repo_url}/compare/{state.config.base_branch}...{branch}?expand=1"
             )
-            report_lines.append("---")
-            report_lines.append("")
-            report_lines.append("## Merge Winner")
-            report_lines.append("")
-            report_lines.append(
-                f"**Winner:** {winner_alias} "
-                f"({state.alias_mapping.get(winner_alias, 'unknown')})"
-            )
-            report_lines.append(f"**PR URL:** {pr_url}")
-            report_lines.append("")
+            lines.append(f"**[Create PR for winner]({pr_url})**")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
+    # ── Token usage ──
     if state.token_usage:
         cost_per_1k: dict[str, float] = {
             "opus": 0.075,
             "gpt": 0.060,
             "gemini": 0.035,
         }
-        report_lines.append("---")
-        report_lines.append("")
-        report_lines.append("## Token Usage & Cost Estimates")
-        report_lines.append("")
+        lines.append("## Token Usage")
+        lines.append("")
         total_cost = 0.0
         for alias, tokens in state.token_usage.items():
             model = str(state.alias_mapping.get(alias, "unknown"))
             rate = cost_per_1k.get(model, 0.05)
             cost = (tokens / 1000) * rate
             total_cost += cost
-            report_lines.append(
-                f"- **{alias}** ({model}): {tokens:,} tokens (~${cost:.2f})"
-            )
-        report_lines.append(
+            lines.append(f"- **{alias}** ({model}): {tokens:,} tokens (~${cost:.2f})")
+        lines.append(
             f"- **Total**: {sum(state.token_usage.values()):,} tokens "
             f"(~${total_cost:.2f})"
         )
-        report_lines.append("")
+        lines.append("")
 
     report_path = os.path.join(arena_dir, "report.md")
     with open(report_path, "w") as f:
-        f.write("\n".join(report_lines))
-    logger.info("Final report written to %s", report_path)
+        f.write("\n".join(lines))
+    logger.info("Report updated: %s", report_path)
+
+
+# ---------------------------------------------------------------------------
+# Winning solution
+# ---------------------------------------------------------------------------
+
+
+def _write_winning_solution(state: ArenaState, arena_dir: str) -> None:
+    """Write ``winning-solution.md`` with the winner's final output.
+
+    Only called when the arena is complete and a winner has been elected.
+    """
+    winner = state.verify_winner
+    if not winner:
+        return
+
+    model = state.alias_mapping.get(winner, "unknown")
+    scores = list(state.verify_scores.values())
+    final_score = min(scores) if scores else 0
+
+    lines = [
+        "# Winning Solution",
+        "",
+        f"**Winner:** {winner} ({model})",
+        f"**Final consensus score:** {final_score}",
+        f"**Rounds:** {state.round}",
+    ]
+
+    # PR link
+    if state.branch_names and winner in state.branch_names:
+        branch = state.branch_names[winner]
+        repo = state.config.repo
+        repo_url = repo if repo.startswith("https://") else f"https://github.com/{repo}"
+        pr_url = f"{repo_url}/compare/{state.config.base_branch}...{branch}?expand=1"
+        lines.append(f"**PR:** {pr_url}")
+
+    lines += ["", "---", ""]
+
+    solution = state.solutions.get(winner, "")
+    if solution:
+        lines += ["## Solution", "", solution, ""]
+
+    analysis = state.analyses.get(winner, "")
+    if analysis:
+        lines += ["---", "", "## Analysis", "", analysis, ""]
+
+    path = os.path.join(arena_dir, "winning-solution.md")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    logger.info("Winning solution written to %s", path)
+
+
+# ---------------------------------------------------------------------------
+# Legacy wrapper
+# ---------------------------------------------------------------------------
+
+
+def generate_final_report(state: ArenaState, arena_dir: str) -> None:
+    """Generate report and winning solution at arena completion.
+
+    Kept for backward compatibility.  New code should call
+    :func:`update_report` (rolling) and :func:`_write_winning_solution`
+    directly.
+    """
+    update_report(state, arena_dir)
+    _write_winning_solution(state, arena_dir)
 
 
 def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
@@ -334,6 +497,9 @@ def step_once(arena_dir: str = ARENAS_ROOT) -> ArenaState:
     handler(state, api, state_path=state_path)
 
     _archive_round(state, arena_dir)
+    update_report(state, arena_dir)
+    if state.completed:
+        _write_winning_solution(state, arena_dir)
     save_state(state, state_path)
     return state
 
@@ -344,8 +510,6 @@ def run_orchestrator(arena_dir: str = ARENAS_ROOT) -> None:
         state = step_once(arena_dir)
         if state.completed:
             break
-
-    generate_final_report(state, arena_dir)
 
     consensus = (
         state.consensus_reached
