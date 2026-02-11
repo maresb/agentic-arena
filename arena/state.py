@@ -159,6 +159,9 @@ class ArenaState(BaseModel):
     # Each agent's individual convergence score (1-10).
     verify_scores: dict[str, int] = Field(default_factory=dict)
 
+    # Each agent's structured divergences list (topic + description dicts).
+    verify_divergences: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+
     # The elected winner alias (set when consensus is reached).
     verify_winner: str | None = None
 
