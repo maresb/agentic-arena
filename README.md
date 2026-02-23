@@ -277,7 +277,7 @@ arena/
   __init__.py        Package root (version)
   __main__.py        Typer CLI: init, run, step, status, add-comment
   api.py             Cursor Cloud Agents HTTP client with retry/backoff
-  extraction.py      XML tag parsing, Verdict model, fallback heuristics
+  extraction.py      JSON verdict parsing, VoteVerdict model, fallback heuristics
   git.py             Git remote URL parsing
   orchestrator.py    Main loop, round archival, report generation
   phases.py          Phase functions: generate, evaluate
