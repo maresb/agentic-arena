@@ -3,21 +3,17 @@
 Multi-model consensus via Cursor Cloud Agents.
 
 Frontier models solve a task through iterative rounds of independent work,
-anonymized critique, informed revision, and verified consensus. The orchestrator
-is a stateless Python script that communicates with the
-[Cursor Cloud Agents API](https://docs.cursor.com) over HTTP -- no tmux, no
-terminal scraping, no filesystem polling.
+anonymized critique, and verified consensus. The orchestrator is a Python CLI
+that communicates with the
+[Cursor Cloud Agents API](https://cursor.com/docs/cloud-agent/api/endpoints)
+over HTTP.
 
 ```
-solve --> evaluate --> revise --> verify
-                                   |-- CONSENSUS (score >= 8) --> done
-                                   |-- CONTINUE  (score < 8)  --> evaluate (next round)
-                                   '-- max rounds reached     --> done
+generate --> evaluate
+               |-- CONSENSUS (score >= 8) --> done
+               |-- CONTINUE  (score < 8)  --> generate (next round)
+               '-- max rounds reached     --> done
 ```
-
-See [`proposal.md`](proposal.md) for the full design rationale.
-
----
 
 ## Getting started
 
@@ -60,18 +56,20 @@ curl -fsSL https://pixi.sh/install.sh | bash
 source ~/.bashrc
 
 # Clone and install dependencies (pixi handles everything)
-git clone https://github.com/maresb/cursor-agentic-arena.git
-cd cursor-agentic-arena
+git clone https://github.com/maresb/agentic-arena.git
+cd agentic-arena
 pixi install
 ```
 
 All dependencies (Python 3.13, requests, pydantic, typer, pytest, mypy, ruff)
-are declared in `pixi.toml` and resolved via conda-forge. No pip, no venv.
+are declared in `pixi.toml` and resolved via conda-forge. The project is also
+installed as an editable package via `pyproject.toml`, which provides an `arena`
+console entrypoint.
 
 ### Verify the install
 
 ```bash
-pixi run test       # 120 unit tests
+pixi run test       # unit tests
 pixi run lint       # ruff
 pixi run format     # ruff format
 pixi run typecheck  # mypy
@@ -79,9 +77,23 @@ pixi run typecheck  # mypy
 
 ---
 
+## Design
+
+- **Why Cloud Agents:** each agent runs in an isolated VM with its own branch,
+  exposes structured conversations via API, and removes local tmux/worktree
+  orchestration complexity.
+- **Anonymization:** model identities are mapped to randomized aliases per run
+  (for example, `agent_a -> opus`) and prompt ordering is shuffled to reduce
+  positional bias.
+- **Non-goals:** real-time interaction, correctness guarantees from consensus,
+  and building a general-purpose agent framework.
+
+---
+
 ## Usage
 
-The CLI has four commands: **init**, **run**, **step**, and **status**.
+The CLI has five commands: **init**, **run**, **step**, **status**, and
+**add-comment**.
 
 ### Initialize an arena
 
@@ -93,23 +105,22 @@ pixi run arena init \
   --max-rounds 3
 ```
 
-This creates `arenas/0001/state.json` with a randomized alias-to-model mapping
-and sets the phase to `solve`. By default all three models (Claude Opus, GPT,
+This creates `arenas/0001/state.yaml` with a randomized alias-to-model mapping
+and sets the phase to `generate`. By default all three models (Claude Opus, GPT,
 Gemini) are used; use `--models` to select a subset.
 
 #### CLI flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--task` | *(required)* | Task description for the agents to solve |
-| `--repo` | *(required)* | GitHub repository (`owner/repo` format) |
+| `--task` | placeholder | Task description for the agents to solve (edit `state.yaml` before running) |
+| `--repo` | git remote | GitHub repository (`owner/repo` format); auto-detected from `origin` |
 | `--base-branch` | `main` | Branch the agents work from |
-| `--max-rounds` | `3` | Cap on evaluate-revise-verify cycles (1-10) |
+| `--max-rounds` | `3` | Cap on generate-evaluate cycles (1-10) |
 | `--models` | all | Comma-separated model list (e.g. `opus,gpt`) |
 | `--verify-commands` | none | Comma-separated commands to run on consensus (e.g. `"pixi run pytest,pixi run mypy ."`) |
 | `--verify-mode` | `advisory` | `advisory` (log failures) or `gating` (override consensus on failure) |
-| `--branch-only` | `false` | Omit pasted solutions in prompts; agents must `git fetch` branches instead |
-| `--arena-dir` | `arenas/0001` | Directory for state file and output archives |
+| `--arena-dir` | auto | Next sequentially-numbered directory under `arenas/` |
 
 ### Run the orchestrator
 
@@ -122,7 +133,7 @@ The orchestrator loops through phases until consensus is reached or max rounds
 are exhausted. It is fully **resumable** -- kill it at any point and restart;
 previously completed work is never re-done.
 
-Progress is logged to both stderr and `arenas/0001/orchestrator.log`. Add `-v`
+Progress is logged to both stderr and `arenas/NNNN/orchestrator.log`. Add `-v`
 for DEBUG-level output.
 
 During polling, the orchestrator prints dots (`.`) to stderr so you know it is
@@ -134,8 +145,8 @@ still working. These dots are suppressed when verbose logging is enabled.
 pixi run arena step
 ```
 
-Executes exactly one phase transition (e.g. solve → evaluate) and exits. Useful
-for debugging or running phases manually.
+Executes exactly one phase transition (e.g. generate → evaluate) and exits.
+Useful for debugging or running phases manually.
 
 ### Check status
 
@@ -181,19 +192,25 @@ pixi run arena init \
 
 - **advisory** (default): Log verify failures but accept the consensus.
 - **gating**: Override consensus to CONTINUE if any verify command fails,
-  forcing another evaluate-revise-verify round.
+  forcing another generate-evaluate round.
 
-### Branch-only mode
+### Inject operator comments
 
-For tasks with large codebases, `--branch-only` skips pasting solution text
-into prompts. Instead, agents are told to `git fetch` each other's branches
-and inspect the actual committed work:
+Use `add-comment` to inject a message into running agent conversations:
 
 ```bash
-pixi run arena init --task "..." --repo owner/repo --branch-only
+# Interactive mode (walks through delivery, targets, framing)
+pixi run arena add-comment
+
+# Non-interactive: deliver immediately to all agents
+pixi run arena add-comment --message "Focus on error handling" --immediate
+
+# Queue for next phase start
+pixi run arena add-comment --message "Ignore the failing lint rule" --queue
 ```
 
-This reduces prompt token usage but requires agents to use git commands.
+Comments can target specific agents with `--targets agent_a,agent_b` and can
+include file contents via `--file path/to/context.md`.
 
 ---
 
@@ -202,7 +219,7 @@ This reduces prompt token usage but requires agents to use git commands.
 The orchestrator is designed to survive crashes at any point:
 
 - **Atomic state writes.** State is written to a temp file and renamed, so a
-  crash during write never leaves a corrupt `state.json`.
+  crash during write never leaves a corrupt `state.yaml`.
 - **Idempotent phases.** Each agent's progress is tracked individually
   (pending → sent → done). On restart, only unfinished agents are re-processed.
 - **Crash-safe follow-ups.** Before sending a follow-up, the message count is
@@ -227,28 +244,28 @@ Each arena run produces:
 
 ```
 arenas/0001/
-  state.json                  Main state file (file: references to artifacts)
+  state.yaml                  Main state file (file: references to artifacts)
   orchestrator.log            Full debug log
-  report.md                   Final summary report (generated on completion)
+  report.md                   Rolling summary report (updated each phase)
+  winning-solution.md         Winner's final solution (on completion)
   artifacts/                  Externalized large text from state
     solutions_agent_a.md
-    analyses_agent_a.md
     critiques_agent_a.md
     final_verdict.md
     ...
-  00-01-solve-a-opus-a1b2c3.md        Round 0, solve phase archive
-  00-01-analysis-a-opus-d4e5f6.md     Round 0, analysis archive
-  00-02-critique-b-gpt-789abc.md      Round 0, evaluate phase archive
+  00-1-generate-opus-solution-a1b2c3.md   Round 0, generate phase archive
+  00-2-evaluate-gpt-critique-d4e5f6.md    Round 0, evaluate phase archive
+  00-2-evaluate-gpt-verdict-789abc.json   Round 0, verdict archive
   ...
 ```
 
-**Archive naming:** `{round:02d}-{phase:02d}-{type}-{letter}-{model}-{uid}.md`
+**Archive naming:** `{round:02d}-{phase_num}-{phase}-{model}-{artifact}-{uid}.{ext}`
 where `uid` is a content-addressed SHA-256 prefix. Files are deduplicated --
 restarting the orchestrator does not create duplicate archives.
 
-**Artifact externalization:** Large text fields (solutions, analyses, critiques,
+**Artifact externalization:** Large text fields (solutions, critiques,
 verify results, final verdict) are stored as separate `.md` files under
-`artifacts/`. The JSON state file stores `file:` references that are resolved
+`artifacts/`. The YAML state file stores `file:` references that are resolved
 transparently on load. Old inline state files (without `file:` references)
 are still loaded correctly.
 
@@ -259,17 +276,20 @@ are still loaded correctly.
 ```
 arena/
   __init__.py        Package root (version)
-  __main__.py        Typer CLI: init, run, step, status
+  __main__.py        Typer CLI: init, run, step, status, add-comment
   api.py             Cursor Cloud Agents HTTP client with retry/backoff
   extraction.py      XML tag parsing, Verdict model, fallback heuristics
+  git.py             Git remote URL parsing
   orchestrator.py    Main loop, round archival, report generation
-  phases.py          Phase functions: solve, evaluate, revise, verify
+  phases.py          Phase functions: generate, evaluate
   prompts.py         Prompt templates, model name mapping, branch hints
   state.py           Pydantic models (ArenaConfig, ArenaState), persistence
 
 tests/
+  test_api.py          API client tests
   test_cli.py          CLI commands via Typer CliRunner
   test_extraction.py   XML parsing, verdict model, fallbacks
+  test_git.py          Git remote URL parsing tests
   test_integration.py  Live API tests (requires CURSOR_API_KEY)
   test_orchestrator.py Report generation, archive deduplication
   test_phases.py       Phase control flow with mock API
@@ -277,9 +297,8 @@ tests/
   test_state.py        Pydantic models, serialization, externalization
 
 .github/workflows/ci.yml  CI pipeline: test, lint, format, typecheck
+pyproject.toml             Package metadata, console_scripts entrypoint
 pixi.toml                  Dependencies and task definitions
-proposal.md                Full design document
-execution-plan.md          Implementation roadmap
 ```
 
 ### Key types
@@ -287,8 +306,8 @@ execution-plan.md          Implementation roadmap
 | Type | Module | Purpose |
 |---|---|---|
 | `ArenaConfig` | `state.py` | Frozen config: task, repo, branch, rounds, models, verify |
-| `ArenaState` | `state.py` | Full mutable state persisted to `state.json` |
-| `Phase` | `state.py` | StrEnum: solve, evaluate, revise, verify, done |
+| `ArenaState` | `state.py` | Full mutable state persisted to `state.yaml` |
+| `Phase` | `state.py` | StrEnum: generate, evaluate, done |
 | `ProgressStatus` | `state.py` | StrEnum: pending, sent, done |
 | `DEFAULT_MODELS` | `state.py` | Default model short names: opus, gpt, gemini |
 | `Verdict` | `extraction.py` | Parsed judge verdict with decision, score, etc. |
@@ -304,16 +323,16 @@ The test suite mocks all API calls and validates control flow, state
 transitions, extraction logic, prompt construction, and serialization:
 
 ```bash
-pixi run test        # 120 tests
+pixi run test        # 227 tests
 ```
 
 ### Integration tests (requires API key)
 
 Live API tests are in `tests/test_integration.py`. They are skipped by default
-and only run when `CURSOR_API_KEY` is set:
+and require an explicit opt-in (they launch real agents and cost real money):
 
 ```bash
-CURSOR_API_KEY=... pixi run pytest tests/test_integration.py -v
+RUN_INTEGRATION_TESTS=1 CURSOR_API_KEY=... pixi run pytest tests/test_integration.py -v
 ```
 
 These tests verify authentication, model listing, repository listing, and
@@ -353,7 +372,7 @@ Run `pixi run arena init ...` first to create the state file.
 
 In `--verify-mode gating`, failing verify commands override consensus and force
 another round. Check the verify command output in the report or in
-`arenas/0001/artifacts/verify_results_*.md`. Common causes:
+`arenas/NNNN/artifacts/verify_results_*.md`. Common causes:
 
 - Tests that depend on the local environment (missing dependencies, wrong
   Python version).

@@ -10,8 +10,6 @@ from typing import Any
 
 import requests
 
-# TODO: if more shared utilities emerge beyond is_assistant_message,
-# extract them into arena/utils.py to avoid coupling api -> extraction.
 from arena.extraction import is_assistant_message
 
 logger = logging.getLogger("arena")
@@ -20,6 +18,7 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 5
 BASE_BACKOFF = 2.0  # seconds
 DEFAULT_TIMEOUT = 60  # seconds per HTTP request
+AGENT_POLL_TIMEOUT = 1800  # seconds to wait for an agent to finish (30 min)
 
 
 def _emit_poll_dot() -> None:
@@ -205,7 +204,7 @@ def wait_for_agent(
 def wait_for_all_agents(
     api: CursorCloudAPI,
     agents: dict[str, str],
-    timeout: int = 600,
+    timeout: int = AGENT_POLL_TIMEOUT,
     poll_interval: int = 10,
 ) -> None:
     """Poll multiple agents concurrently until all are FINISHED.
@@ -332,7 +331,7 @@ def wait_for_followup(
 def wait_for_all_followups(
     api: CursorCloudAPI,
     agents: dict[str, tuple[str, int]],
-    timeout: int = 600,
+    timeout: int = AGENT_POLL_TIMEOUT,
     poll_interval: int = 10,
     grace_period: int = 30,
 ) -> None:
