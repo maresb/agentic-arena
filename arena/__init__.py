@@ -1,3 +1,8 @@
 """Agentic Arena — Multi-model consensus via Cursor Cloud Agents."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("agentic-arena")
+except PackageNotFoundError:
+    __version__ = "unknown"
