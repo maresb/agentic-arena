@@ -130,14 +130,14 @@ packages:
   timestamp: 1744137672556
 - pypi: ./
   name: agentic-arena
-  version: 0.1.0
-  sha256: 5c85098efd992a1bb3007c2229a6fb26bee88db4478fda35096c4852a05c6978
+  version: 0.1.dev141+gc06371b9e.d20260223
+  sha256: e29419072c0ef43692258c535e1126d56cfbf41b211c9e96d0033bb8fa80a656
   requires_dist:
-  - requests>=2.32.5,<3
-  - typer>=0.21.1,<0.22
   - pydantic>=2.12.5,<3
   - python-dotenv>=1.2.1,<2
+  - requests>=2.32.5,<3
   - ruamel-yaml>=0.18,<0.19
+  - typer>=0.21.1,<0.22
   requires_python: '>=3.13'
 - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-types-0.7.0-pyhd8ed1ab_1.conda
   sha256: e0ea1ba78fbb64f17062601edda82097fcf815012cf52bb704150a2668110d48
