@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 arena = "arena.__main__:app"
+agentic-arena = "arena.__main__:app"
 
 [project.urls]
 Homepage = "https://github.com/maresb/agentic-arena"

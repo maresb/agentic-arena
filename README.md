@@ -19,7 +19,7 @@ generate --> evaluate
 
 ### Prerequisites
 
-- [pixi](https://pixi.sh) for package management (Python 3.13 is installed automatically).
+- **Python 3.13+** (or [uv](https://docs.astral.sh/uv/) / [pixi](https://pixi.sh) which install it automatically).
 - A **Cursor API key** (see below).
 - A **GitHub repository** connected to your Cursor account.
 
@@ -48,7 +48,22 @@ echo 'CURSOR_API_KEY=key_xxx...' > .env
 > **Note:** Free-plan API keys do **not** support the Cloud Agents API. You
 > need a paid Cursor plan (Pro, Business, or Enterprise).
 
-### Install
+### Quick start
+
+```bash
+# With uvx (recommended)
+uvx agentic-arena --help
+
+# Or with pipx / pip
+pipx install agentic-arena
+arena --help
+```
+
+Requires Python 3.13+. The `arena` and `agentic-arena` commands are
+equivalent. All examples below use `arena`; substitute `uvx agentic-arena`
+if you haven't installed the package.
+
+### Developer install
 
 ```bash
 # Install pixi if you don't have it
@@ -63,7 +78,7 @@ pixi install
 
 All dependencies (Python 3.13, requests, pydantic, typer, pytest, mypy, ruff)
 are declared in `pixi.toml` and resolved via conda-forge. The project is also
-installed as an editable package via `pyproject.toml`, which provides an `arena`
+installed as an editable package via `pyproject.toml`, which provides the `arena`
 console entrypoint.
 
 ### Verify the install
@@ -98,7 +113,7 @@ The CLI has five commands: **init**, **run**, **step**, **status**, and
 ### Initialize an arena
 
 ```bash
-pixi run arena init \
+arena init \
   --task "Review the authentication module for security issues" \
   --repo owner/repo \
   --base-branch main \
@@ -126,7 +141,7 @@ Gemini) are used; use `--models` to select a subset.
 
 ```bash
 export CURSOR_API_KEY="your-key-here"
-pixi run arena run
+arena run
 ```
 
 The orchestrator loops through phases until consensus is reached or max rounds
@@ -142,7 +157,7 @@ still working. These dots are suppressed when verbose logging is enabled.
 ### Single-step mode
 
 ```bash
-pixi run arena step
+arena step
 ```
 
 Executes exactly one phase transition (e.g. generate → evaluate) and exits.
@@ -151,7 +166,7 @@ Useful for debugging or running phases manually.
 ### Check status
 
 ```bash
-pixi run arena status
+arena status
 ```
 
 Shows the current phase, round, alias mapping, agent IDs, and per-agent
@@ -168,10 +183,10 @@ By default, the arena uses all three models: `opus`, `gpt`, and `gemini`. Use
 
 ```bash
 # Two-model arena
-pixi run arena init --task "..." --repo owner/repo --models opus,gpt
+arena init --task "..." --repo owner/repo --models opus,gpt
 
 # Single-model smoke test
-pixi run arena init --task "..." --repo owner/repo --models opus --max-rounds 1
+arena init --task "..." --repo owner/repo --models opus --max-rounds 1
 ```
 
 The alias list (agent_a, agent_b, ...) is automatically sized to match the
@@ -183,10 +198,10 @@ Verify commands run after the judge declares consensus. They let you gate
 consensus on passing tests:
 
 ```bash
-pixi run arena init \
+arena init \
   --task "Fix the login bug" \
   --repo owner/repo \
-  --verify-commands "pixi run pytest,pixi run mypy ." \
+  --verify-commands "pytest,mypy ." \
   --verify-mode gating
 ```
 
@@ -200,13 +215,13 @@ Use `add-comment` to inject a message into running agent conversations:
 
 ```bash
 # Interactive mode (walks through delivery, targets, framing)
-pixi run arena add-comment
+arena add-comment
 
 # Non-interactive: deliver immediately to all agents
-pixi run arena add-comment --message "Focus on error handling" --immediate
+arena add-comment --message "Focus on error handling" --immediate
 
 # Queue for next phase start
-pixi run arena add-comment --message "Ignore the failing lint rule" --queue
+arena add-comment --message "Ignore the failing lint rule" --queue
 ```
 
 Comments can target specific agents with `--targets agent_a,agent_b` and can
@@ -232,7 +247,7 @@ The orchestrator is designed to survive crashes at any point:
 To resume after a crash, simply re-run the same command:
 
 ```bash
-pixi run arena run
+arena run
 ```
 
 ---
@@ -295,7 +310,9 @@ tests/
   test_prompts.py      Prompt template content, branch hints
   test_state.py        Pydantic models, serialization, externalization
 
-.github/workflows/ci.yml  CI pipeline: test, lint, format, typecheck
+.github/workflows/
+  ci.yml                   CI pipeline: test, lint, format, typecheck
+  pypi.yaml                Trusted publishing to PyPI on release
 pyproject.toml             Package metadata, console_scripts entrypoint
 pixi.toml                  Dependencies and task definitions
 ```
@@ -365,7 +382,7 @@ resume from where it left off.
 
 ### `No arena state found`
 
-Run `pixi run arena init ...` first to create the state file.
+Run `arena init ...` first to create the state file.
 
 ### Verify commands fail in gating mode
 
