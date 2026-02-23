@@ -5,6 +5,8 @@ without making real API calls.
 """
 
 import json
+import tempfile
+import os
 
 from unittest.mock import MagicMock, patch
 
@@ -130,6 +132,12 @@ def _add_branch_names(state: ArenaState) -> None:
         state.branch_names[alias] = f"cursor/branch-{alias}"
 
 
+def _tmp_state_path() -> str:
+    """Return a state_path inside a fresh temp directory."""
+    d = tempfile.mkdtemp()
+    return os.path.join(d, "state.yaml")
+
+
 class TestStepGenerateInitial:
     """Tests for step_generate at round 0 (initial agent launch)."""
 
@@ -142,7 +150,7 @@ class TestStepGenerateInitial:
         ids = iter(["id-1", "id-2", "id-3"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert api.launch.call_count == 3
         assert len(state.agent_ids) == 3
@@ -164,7 +172,7 @@ class TestStepGenerateInitial:
         ids = iter(["id-1", "id-2"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert api.launch.call_count == 2
 
@@ -175,7 +183,7 @@ class TestStepGenerateInitial:
         ids = iter(["id-1", "id-2", "id-3"])
         api.launch.side_effect = lambda **kw: {"id": next(ids)}
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:
@@ -197,7 +205,7 @@ class TestStepGenerateInitial:
 
         api.status.side_effect = mock_status
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert len(state.branch_names) == 3
         for alias in state.alias_mapping:
@@ -226,7 +234,7 @@ class TestStepEvaluate:
         state = self._make_solved_state()
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         assert api.followup.call_count == 3
         # No-consensus path transitions to GENERATE and clears transient
@@ -246,7 +254,7 @@ class TestStepEvaluate:
         state = self._make_solved_state()
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         assert state.phase == Phase.GENERATE
         assert state.round == 0  # round NOT yet incremented (step_once does it)
@@ -268,7 +276,7 @@ class TestStepEvaluate:
         ).side_effect
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         assert state.phase == Phase.DONE
         assert state.completed is True
@@ -286,7 +294,7 @@ class TestStepEvaluate:
         ).side_effect
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         # aliases[0]'s self-vote should be stripped from their own entry
         assert aliases[0] not in state.verify_votes.get(aliases[0], [])
@@ -302,7 +310,7 @@ class TestStepEvaluate:
         state = self._make_solved_state()
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         # After completion, sent_msg_counts should be cleared at transition
         assert state.sent_msg_counts == {}
@@ -317,7 +325,7 @@ class TestStepEvaluate:
         api = make_mock_api()
         assert state.verdict_history == []
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         assert len(state.verdict_history) == 1
 
@@ -333,7 +341,7 @@ class TestStepEvaluate:
         state.round = 3  # max_rounds defaults to 3
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         assert state.phase == Phase.DONE
         assert state.completed is True
@@ -353,7 +361,7 @@ class TestStepEvaluate:
 
         api = make_mock_api()
 
-        step_evaluate(state, api)
+        step_evaluate(state, api, state_path=_tmp_state_path())
 
         # Should still complete — all three agents done
         assert state.phase in (Phase.GENERATE, Phase.DONE)
@@ -382,7 +390,7 @@ class TestStepGenerateRevision:
         state = self._make_generate_revision_state()
         api = make_mock_api()
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert api.followup.call_count == 3
         assert state.phase == Phase.EVALUATE
@@ -395,7 +403,7 @@ class TestStepGenerateRevision:
         state = self._make_generate_revision_state()
         api = make_mock_api()
 
-        step_generate(state, api)
+        step_generate(state, api, state_path=_tmp_state_path())
 
         assert state.phase == Phase.EVALUATE
         for alias in state.alias_mapping:

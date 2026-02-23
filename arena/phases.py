@@ -211,9 +211,7 @@ def _fetch_with_retry(
 # ---------------------------------------------------------------------------
 
 
-def step_generate(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
-) -> None:
+def step_generate(state: ArenaState, api: CursorCloudAPI, *, state_path: str) -> None:
     """Generate solutions — launch agents (round 0) or revise (round > 0).
 
     Round 0: launch brand-new agents with the task prompt.
@@ -372,9 +370,7 @@ def step_generate(
 # ---------------------------------------------------------------------------
 
 
-def step_evaluate(
-    state: ArenaState, api: CursorCloudAPI, *, state_path: str = "arena/state.yaml"
-) -> None:
+def step_evaluate(state: ArenaState, api: CursorCloudAPI, *, state_path: str) -> None:
     """Each agent critiques all solutions and votes for the best.
 
     This phase combines the old evaluate + verify phases.  It produces
