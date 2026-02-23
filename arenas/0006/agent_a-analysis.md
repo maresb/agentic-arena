@@ -1,10 +1,8 @@
 ## RISKS — Known risks, edge cases, trade-offs.
-- **Consensus Threshold**: Lowering the consensus threshold to 8 allows for slightly more divergence, potentially accepting suboptimal solutions, but it aligns with the documented intent.
-- **Data Leakage**: The `arena/conversations/` directory was previously unignored, which could lead to accidental commitment of sensitive conversation data. This is mitigated by the `.gitignore` update.
-- **Cost Management**: Running multiple agents for multiple rounds can be expensive. Users should monitor usage via the Cursor dashboard as the tool does not currently track costs (tracked as a TODO).
-- **API Reliability**: The tool relies heavily on the Cursor Cloud Agents API. Rate limits or downtime could impact stability (mitigated by retry logic).
+- **Consensus Threshold**: The threshold is set to 8 (down from 9) to allow for realistic convergence, but this might accept slightly less perfect solutions.
+- **Agent Sandbox**: Users must still be cautious with `verify_commands` as they run in the agent's environment (though cloud-boxed, side effects could be possible if configured insecurely).
+- **Cost Visibility**: The project lacks built-in cost tracking for the LLM usage; users must rely on the Cursor dashboard.
 
 ## OPEN QUESTIONS — Uncertainties requiring verification.
-- **Distribution Model**: Is the project intended to be distributed primarily via `pixi` or as a PyPI package? If the latter, `pyproject.toml` metadata needs expansion.
-- **Agent Sandbox Security**: While agents run in cloud VMs, users should exercise caution when running the generated code locally, especially `verify_commands`.
-- **Maintenance of `proposal.md`**: Should the design proposal be kept as a historical artifact or updated as documentation? Currently kept as is.
+- **PyPI Distribution**: If the project is intended for PyPI, `pyproject.toml` needs more metadata (classifiers, description, etc.). Currently, it seems optimized for `pixi`/source usage.
+- **Long-term Maintenance**: With `TODO.md` gone, where are future tasks tracked? (Presumably GitHub Issues).
