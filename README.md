@@ -15,72 +15,6 @@ generate --> evaluate
                '-- max rounds reached     --> done
 ```
 
----
-
-## Design
-
-### Why Cursor Cloud Agents
-
-Each API call launches an autonomous agent in an isolated Ubuntu VM that
-clones a GitHub repo, works on its own branch, and can open a PR when
-finished. This eliminates most infrastructure complexity:
-
-| Concern | Local (tmux + libtmux) | Cloud Agents API |
-|---|---|---|
-| Security | Dev container + deny-by-default perms | Cursor's isolated VMs |
-| Filesystem isolation | Git worktrees | Automatic per-agent branches |
-| Completion detection | File-stable + pane-idle heuristics | Poll status until `FINISHED` |
-| Content extraction | Terminal scraping or file parsing | `GET /conversation` returns JSON |
-| Observability | `tmux attach` for live view | Cursor web UI; conversation API |
-| Orchestrator | libtmux + signal handlers + pipe-pane | Python script making HTTP calls |
-
-**Trade-offs accepted:**
-
-- **Latency.** Each agent turn is a full autonomous run (minutes, not
-  seconds). A 2-round arena takes ~20-40 minutes.
-- **Cost.** Cloud agents use Max Mode pricing. Three agents across multiple
-  rounds is nontrivial spend.
-- **Observability.** No real-time terminal view. You monitor via status
-  polling and post-hoc conversation retrieval.
-
-### Anonymization
-
-The orchestrator maintains a mapping randomized per run:
-
-```python
-alias_mapping = {"agent_a": "opus", "agent_b": "gemini", "agent_c": "gpt"}
-```
-
-All prompts, filenames, and cross-references use aliases. Agents see
-"Agent A's solution" and "Agent B's critique," never model names.
-Presentation order is shuffled per prompt to prevent positional bias.
-
-### Non-goals
-
-- **Real-time interaction.** The arena is a batch process.
-- **Truth guarantees.** Consensus among models does not guarantee
-  correctness. The arena improves quality through structured critique,
-  not epistemic certification.
-- **Collusion prevention.** Models may recognize each other's stylistic
-  fingerprints despite anonymization. Aliases mitigate casual bias, not
-  adversarial identification.
-- **General-purpose agent framework.** This is a single-purpose orchestrator
-  for multi-model debate, not a reusable agent platform.
-
-### Known risks
-
-| Risk | Severity | Mitigation |
-|---|---|---|
-| Agent produces unstructured response (no XML tags) | High | Fallback heuristics; re-prompt with format reminder |
-| Consensus regression to the mean | High | Separate critique before revision; verify prompt classifies disagreements |
-| Cloud agent latency (minutes per turn) | Medium | Parallel execution within phases |
-| Context window accumulation across rounds | Medium | Summarization, diff-only views, or fresh agents per round |
-| API rate limits / transient failures | Medium | Retry with exponential backoff and jitter |
-| Judge bias toward own solution | Medium | Anonymized aliases; anti-bias instruction; judge rotation |
-| State file corruption on crash | Low | Atomic write via temp-file-then-rename |
-
----
-
 ## Getting started
 
 ### Prerequisites
@@ -140,6 +74,19 @@ pixi run lint       # ruff
 pixi run format     # ruff format
 pixi run typecheck  # mypy
 ```
+
+---
+
+## Design
+
+- **Why Cloud Agents:** each agent runs in an isolated VM with its own branch,
+  exposes structured conversations via API, and removes local tmux/worktree
+  orchestration complexity.
+- **Anonymization:** model identities are mapped to randomized aliases per run
+  (for example, `agent_a -> opus`) and prompt ordering is shuffled to reduce
+  positional bias.
+- **Non-goals:** real-time interaction, correctness guarantees from consensus,
+  and building a general-purpose agent framework.
 
 ---
 
