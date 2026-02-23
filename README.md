@@ -34,8 +34,8 @@ third-party providers).
    ([direct link](https://cursor.com/dashboard?tab=integrations)).
 3. Click **Create New API Key**, give it a name, and copy the generated key.
    You will not be able to see the key again after leaving the page.
-4. Export the key in your shell **or** put it in a `.env` file at the project
-   root (already gitignored):
+4. Export the key in your shell **or** put it in a `.env` file in your
+   working directory:
 
 ```bash
 # Option A: environment variable
@@ -302,7 +302,7 @@ arena/
 tests/
   test_api.py          API client tests
   test_cli.py          CLI commands via Typer CliRunner
-  test_extraction.py   XML parsing, verdict model, fallbacks
+  test_extraction.py   JSON verdict parsing, fallback heuristics
   test_git.py          Git remote URL parsing tests
   test_integration.py  Live API tests (requires CURSOR_API_KEY)
   test_orchestrator.py Report generation, archive deduplication
@@ -339,7 +339,7 @@ The test suite mocks all API calls and validates control flow, state
 transitions, extraction logic, prompt construction, and serialization:
 
 ```bash
-pixi run test        # 227 tests
+pixi run test
 ```
 
 ### Integration tests (requires API key)
@@ -406,13 +406,3 @@ rate limits, wait a few minutes before retrying.
 When an agent's evaluate response cannot be parsed as a valid JSON verdict,
 the orchestrator logs a warning and uses fallback heuristics to extract
 scores and votes.
-
----
-
-## TODOs
-
-- [ ] **Webhook support.** Replace polling with webhooks for agent status
-      updates if the API supports them.
-- [ ] **Context management strategies.** Implement `diff` and `fresh` context
-      modes for large tasks (infrastructure is in place, strategies not yet
-      wired).
