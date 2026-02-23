@@ -40,6 +40,9 @@ version-file = "arena/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["arena"]
 
+[tool.ruff]
+exclude = ["arena/_version.py"]
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
