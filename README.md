@@ -60,8 +60,8 @@ curl -fsSL https://pixi.sh/install.sh | bash
 source ~/.bashrc
 
 # Clone and install dependencies (pixi handles everything)
-git clone https://github.com/maresb/cursor-agentic-arena.git
-cd cursor-agentic-arena
+git clone https://github.com/maresb/agentic-arena.git
+cd agentic-arena
 pixi install
 ```
 
