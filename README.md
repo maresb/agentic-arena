@@ -329,10 +329,10 @@ pixi run test        # 227 tests
 ### Integration tests (requires API key)
 
 Live API tests are in `tests/test_integration.py`. They are skipped by default
-and only run when `CURSOR_API_KEY` is set:
+and require an explicit opt-in (they launch real agents and cost real money):
 
 ```bash
-CURSOR_API_KEY=... pixi run pytest tests/test_integration.py -v
+RUN_INTEGRATION_TESTS=1 CURSOR_API_KEY=... pixi run pytest tests/test_integration.py -v
 ```
 
 These tests verify authentication, model listing, repository listing, and
