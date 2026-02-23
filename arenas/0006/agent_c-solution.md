@@ -1,82 +1,61 @@
 ## PLAN
-1. Identify release blockers (license, doc/code mismatch, gitignore conflicts) because they directly affect legal viability and user comprehension.
-2. Capture high/medium/low priority cleanup items (internal artifacts, community files, CI/coverage, metadata) to make the repo look professional.
-3. Document security scan results and testing/CI gaps to give a complete publication-readiness view.
+1. Recheck prior blockers against the updated main branch and note resolved items.
+2. Identify any remaining doc/code mismatches, missing OSS hygiene files, or CI gaps.
+3. Produce a refreshed, prioritized publication-readiness action list.
 
 ## CHANGES
 ### Publication-Readiness Report (Agent C)
-**Status:** NOT READY — P0 blockers below.
+**Status:** MOSTLY READY — no P0 blockers found. Address P1 items before public launch.
 
-#### P0 — Blockers (fix before making public)
-1) **Missing LICENSE**
-   - **Evidence:** No LICENSE* file in repo root (Glob search returned 0).
-   - **Impact:** No clear legal permission to use/redistribute.
-   - **Action:** Add a LICENSE file and reference it in README.
+#### ✅ Resolved since last review
+- **LICENSE added** (MIT).
+- **Docs significantly updated** to the 2-phase generate/evaluate loop and YAML state.
+- **Internal run summaries / execution plans removed** from repo root.
+- **Repo metadata updated** (`pixi.toml` name/author + `pyproject.toml` entrypoint).
 
-2) **Docs are out of sync with the code**
+#### P1 — High priority (fix before public release)
+1) **Residual doc/code mismatches remain in README**
    - **Evidence:**
-     - README describes a 4-phase loop (solve/evaluate/revise/verify) and `state.json`,
-       but code uses a 2-phase generate/evaluate loop with `state.yaml`
-       (`arena/state.py`, `arena/phases.py`, `arena/orchestrator.py`).
-     - README documents `--branch-only`, which does not exist in the CLI (`arena/__main__.py`).
-     - README says integration tests run when CURSOR_API_KEY is set, but tests
-       require `RUN_INTEGRATION_TESTS=1` (`tests/test_integration.py`).
-     - Proposal and execution-plan docs describe the older 4-phase design and XML parsing.
-   - **Impact:** Users will follow incorrect instructions and misunderstand behavior.
-   - **Action:** Update README and docs to reflect current architecture (generate/evaluate,
-     YAML state, file-based artifacts, current CLI flags). Either update
-     `proposal.md` / `execution-plan*.md` to current state or clearly mark them as
-     historical design notes.
+     - README still mentions judge selection persistence (crash recovery section),
+       but there is no judge phase in code (`arena/phases.py` is generate/evaluate).
+     - Troubleshooting still references missing `<solution>` XML tags, but the
+       system now requires file-committed outputs (no XML parsing path).
+     - Project structure calls `extraction.py` “XML tag parsing”; actual module
+       parses JSON verdicts (`VoteVerdict`) and file-based artifacts.
+   - **Impact:** Users can be misled about failure modes and architecture.
+   - **Action:** Update/remove the outdated README sections and align the module
+     descriptions with current behavior (file-based outputs + JSON verdicts).
 
-3) **`arenas/` is gitignored but prompts require commits there**
-   - **Evidence:** `.gitignore` ignores `arenas/`; prompts instruct agents to commit
-     `arenas/NNNN/<alias>-solution.md` etc. (`arena/prompts.py`).
-   - **Impact:** Agents cannot commit outputs without `git add -f`, causing failures.
-   - **Action:** Resolve the conflict by either:
-     - removing/relaxing the `arenas/` ignore rule and adding a narrower ignore
-       (or subdir `.gitignore`) for local-only artifacts, or
-     - explicitly instructing `git add -f` in prompts/documentation.
-
-#### P1 — High priority (professional release quality)
-4) **Internal run summaries and plans likely not intended for public release**
-   - **Evidence:** `arena-run-summary*.md`, `execution-plan*.md` include internal
-     logs, other repo names, agent IDs, and debugging details.
-   - **Impact:** Looks like internal artifacts; may leak irrelevant context.
-   - **Action:** Move to `docs/notes/` (with a short context header) or remove
-     before publication. Sanitize any external repo details if kept.
-
-5) **Missing community files**
+2) **Missing community files**
    - **Evidence:** No `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, or `SECURITY.md`.
-   - **Impact:** Contributing expectations and vulnerability handling are unclear.
+   - **Impact:** Contribution and vulnerability handling expectations are unclear.
    - **Action:** Add standard community docs and link them from README.
 
-6) **README examples reference a different repo URL**
-   - **Evidence:** README clone command points to `https://github.com/maresb/cursor-agentic-arena.git`.
-   - **Impact:** Confusing or wrong for public users.
-   - **Action:** Update to the correct canonical repository URL or use a placeholder.
-
 #### P2 — Medium priority
-7) **No coverage reporting**
-   - **Evidence:** CI runs tests but does not report coverage (`.github/workflows/ci.yml`).
+3) **`arenas/` is gitignored while prompts require commits there**
+   - **Evidence:** `.gitignore` ignores `arenas/`; prompts instruct agents to commit
+     `arenas/NNNN/<alias>-solution.md` (`arena/prompts.py`).
+   - **Impact:** If users run the arena on a repo that ignores `arenas/`, agents may
+     need `git add -f` to commit outputs, causing confusion.
+   - **Action:** Document the `git add -f` requirement or adjust ignore rules to
+     allow tracked arena outputs when desired.
+
+4) **No coverage reporting**
+   - **Evidence:** CI runs tests but does not report coverage.
    - **Impact:** Harder for contributors to gauge test depth.
-   - **Action:** Add coverage tooling (e.g., pytest-cov) and optional badge.
+   - **Action:** Add coverage tooling (pytest-cov) and optional badge.
 
-8) **External link verification**
-   - **Evidence:** README links to `https://docs.cursor.com` and other Cursor docs.
-   - **Impact:** Broken links are unprofessional and confusing.
-   - **Action:** Validate and update all external URLs in README and docstrings.
-
-9) **TODOs in code/docs**
-   - **Evidence:** TODO in `arena/api.py` and TODO sections in README/TODO.md.
-   - **Impact:** Acceptable for dev, but better as GitHub issues for a public repo.
-   - **Action:** Move roadmap items to issues; keep README focused on usage.
+5) **README TODO list**
+   - **Evidence:** README ends with a TODO section.
+   - **Impact:** Acceptable, but better tracked as GitHub issues for a public repo.
+   - **Action:** Move the TODO list to issues or a roadmap document.
 
 #### P3 — Low priority polish
-10) **Project metadata cleanup**
-   - **Evidence:** `pixi.toml` name/author is generic ("workspace", "Cursor Agent").
-   - **Action:** Update metadata to actual project name/maintainer.
+6) **External link verification**
+   - **Impact:** Broken links are unprofessional and confusing.
+   - **Action:** Validate all external URLs in README.
 
-11) **Add standard repo hygiene files**
+7) **Repo hygiene extras**
    - **Action:** Consider `.editorconfig`, `CHANGELOG.md`, and issue templates.
 
 #### Security scan notes
