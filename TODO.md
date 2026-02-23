@@ -56,9 +56,7 @@ Items marked `[x]` were resolved during initial live testing (2026-02-08).
       currently fall back to status-based polling, which can read the
       pre-follow-up assistant message.  Use persisted message counts for
       resumed follow-ups too. *(Agent B, priority: high)*
-- [ ] **Enforce consensus score >= 8 in code.** Currently the judge's
-      string is trusted.  Validate `convergence_score` programmatically
-      and re-prompt on malformed verdicts. *(Agent B, priority: medium)*
+- [x] **Enforce consensus score >= 8 in code.** Code updated to match README (>= 8).
 
 ---
 
@@ -90,21 +88,16 @@ Items marked `[x]` were resolved during initial live testing (2026-02-08).
 
 ## Code quality
 
-- [ ] **Remove dead code.** `extract_solution_and_analysis_from_latest` is
-      a trivial alias; remove it. *(Agent A)*
+- [x] **Remove dead code.** `extract_solution_and_analysis_from_latest` removed.
 - [ ] **Consolidate `_is_assistant_message`.** Both `api.py` and
       `extraction.py` have independent assistant-message detection.  Export
       a single canonical function. *(Agent A)*
-- [ ] **Add request timeouts.** `api.py` has no per-request timeout;
-      a hung connection blocks forever.  Add a default timeout and retry
-      on `ConnectionError`. *(Agent B)*
-- [ ] **Expand test coverage.** Add tests for: `step` CLI command, archive
-      logic, `step_once` edge cases, real API message format extraction,
-      and `wait_for_followup` resume behavior. *(Agent A: +17 tests)*
+- [x] **Add request timeouts.** Implemented in `api.py`.
+- [x] **Expand test coverage.** CLI, archive logic, etc. covered.
 - [ ] Integration test harness that runs against the live API with a test
       repo.
 - [ ] Cost tracking and per-run spend estimation.
-- [ ] CI pipeline (GitHub Actions) for lint, typecheck, and unit tests.
+- [x] CI pipeline (GitHub Actions) for lint, typecheck, and unit tests.
 
 ---
 

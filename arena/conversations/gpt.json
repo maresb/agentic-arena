@@ -1,0 +1,14 @@
+[
+  {
+    "role": "assistant",
+    "content": "Default assistant response"
+  },
+  {
+    "role": "user",
+    "content": "follow-up"
+  },
+  {
+    "role": "assistant",
+    "content": "Default assistant response"
+  }
+]
