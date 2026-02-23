@@ -33,6 +33,9 @@ Repository = "https://github.com/maresb/agentic-arena"
 [tool.hatch.version]
 source = "vcs"
 
+[tool.hatch.build.hooks.vcs]
+version-file = "arena/_version.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["arena"]
 
