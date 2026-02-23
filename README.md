@@ -384,11 +384,11 @@ The Cursor API may rate-limit repository listing requests. The API client
 retries with exponential backoff (up to 5 attempts). If you hit persistent
 rate limits, wait a few minutes before retrying.
 
-### Extraction failures (no `<solution>` tag)
+### Verdict parsing failures
 
-When an agent's response lacks the expected `<solution>` XML tag, the
-orchestrator sends a re-prompt asking the agent to reformat. If the retry also
-fails, the full response is used as the solution (with a warning logged).
+When an agent's evaluate response cannot be parsed as a valid JSON verdict,
+the orchestrator logs a warning and uses fallback heuristics to extract
+scores and votes.
 
 ---
 
