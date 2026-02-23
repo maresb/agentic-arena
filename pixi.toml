@@ -1,7 +1,7 @@
 [workspace]
-authors = ["Cursor Agent <cursoragent@cursor.com>"]
+authors = ["Ben Mares <services-agentic-arena@tensorial.com>"]
 channels = ["conda-forge"]
-name = "workspace"
+name = "agentic-arena"
 platforms = ["linux-64"]
 version = "0.1.0"
 
@@ -12,6 +12,9 @@ format = "ruff format arena/ tests/"
 format-check = "ruff format arena/ tests/ --check"
 typecheck = "mypy arena/ --ignore-missing-imports"
 arena = "python -m arena"
+
+[pypi-dependencies]
+agentic-arena = { path = ".", editable = true }
 
 [dependencies]
 python = "3.13.*"

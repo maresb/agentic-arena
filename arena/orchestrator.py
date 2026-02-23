@@ -440,6 +440,7 @@ def update_report(state: ArenaState, arena_dir: str) -> None:
 
     # ── Token usage ──
     if state.token_usage:
+        # Rough estimates — actual pricing depends on your Cursor plan.
         cost_per_1k: dict[str, float] = {
             "opus": 0.075,
             "gpt": 0.060,
