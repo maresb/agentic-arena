@@ -10,8 +10,8 @@ over HTTP.
 
 ```
 generate --> evaluate
-               |-- CONSENSUS (score >= 8) --> done
-               |-- CONTINUE  (score < 8)  --> generate (next round)
+               |-- CONSENSUS (score >= 9) --> done
+               |-- CONTINUE  (score < 9)  --> generate (next round)
                '-- max rounds reached     --> done
 ```
 
