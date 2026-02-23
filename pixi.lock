@@ -130,8 +130,8 @@ packages:
   timestamp: 1744137672556
 - pypi: ./
   name: agentic-arena
-  version: 0.1.dev148+g3e117ee11.d20260223
-  sha256: cda3c359eac61263b18b8c7b11e6d1dc0b7b05664eb6c18b50cba2296ea92d85
+  version: 0.1.dev150+g3f5e94b54.d20260223
+  sha256: f3d8bd37ebc6660e4fb1b623d5e231d99fc2237b60a2661f8159f0cbf6b5eedf
   requires_dist:
   - pydantic>=2.12.5,<3
   - python-dotenv>=1.2.1,<2
