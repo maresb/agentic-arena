@@ -226,9 +226,8 @@ The orchestrator is designed to survive crashes at any point:
   persisted. On restart, the orchestrator compares the current message count to
   the saved count to detect whether the follow-up was actually delivered,
   preventing duplicate prompts.
-- **Judge selection is persisted.** The verify phase saves the selected judge
-  before sending the verdict prompt, so a crash won't re-select a different
-  judge on restart.
+- **Vote state is persisted.** Per-agent vote progress is saved before
+  each verdict prompt, so a crash won't lose already-collected votes.
 
 To resume after a crash, simply re-run the same command:
 
