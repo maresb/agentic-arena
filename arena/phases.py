@@ -513,7 +513,7 @@ def step_evaluate(state: ArenaState, api: CursorCloudAPI, *, state_path: str) ->
             winner = candidate
             break
 
-    consensus = final_score >= 9 and winner is not None
+    consensus = final_score >= 8 and winner is not None
 
     logger.info(
         "Vote results: scores=%s, tally=%s, final_score=%d, winner=%s, consensus=%s",
